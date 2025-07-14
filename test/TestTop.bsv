@@ -28,7 +28,7 @@ module mkTestTop(Empty);
 
         // ==================== 初始化 ====================
         rule initialize (cycleCount == 10);
-            let fd <- $fopen("/home/psz/RealEmu/scripts/throughout.txt", "w");
+            let fd <- $fopen("/home/emu/dev/RealEmu/scripts/throughout.txt", "w");
             logFile <= fd;
         endrule
 
