@@ -1,7 +1,10 @@
 include ../Makefile.base
 
-TESTFILE ?= TestTop.bsv
-TOPMODULE ?= mkTestTop
+TESTFILE ?= TestChannel.bsv
+TOPMODULE ?= mkTestLogDistanceGainLossModel
+
+# TESTFILE ?= TestPhySinrStats.bsv
+# TOPMODULE ?= mkTestPhySinrStats
 
 SCRIPT_DIR = ../scripts
 MEM_DIR = ../mem

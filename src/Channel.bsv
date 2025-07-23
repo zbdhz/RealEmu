@@ -91,6 +91,9 @@ endmodule
 
 
 module mkGainLossModelLogDistance
+#(
+String filename_location
+)
 // #(
 //     BRAM2Port#(PhyId, NodeDistance) distanceRam2
 //     // RegBlock regBlock                                   
@@ -113,14 +116,15 @@ module mkGainLossModelLogDistance
 
     //ram的外部定义，需要暴露另一端口给DMA配置  d:10
     BRAM2Port#(Bit#(DEV_ID_WIDTH), NodeDistance) distanceRam2 <- mkBRAM2Server(
-        defaultValue
-        // BRAM_Configure {                            
-        //     memorySize   : 0,                       
-        //     loadFormat   : None,     
-        //     latency      : 2,                          
-        //     outFIFODepth : 4,                          
-        //     allowWriteResponseBypass : False           
-        // }
+        // defaultValue
+        BRAM_Configure {                            
+            memorySize   : 0,                       
+            // loadFormat   : tagged Hex "bram_one.txt",
+            loadFormat   : tagged Hex "filename_location",     
+            latency      : 2,                          
+            outFIFODepth : 4,                          
+            allowWriteResponseBypass : False           
+        }
     );
 
     //外部配置接口
@@ -154,7 +158,7 @@ module mkGainLossModelLogDistance
     rule queryLoss;
         let distance <- distanceRam2.portB.response.get;
         lossTable.request.put(unpack(distance));
-        // $display("%d",distance);
+        $display("diatance:%d",distance);
     endrule
 
     //loss = 20lg(d);
@@ -164,6 +168,7 @@ module mkGainLossModelLogDistance
         txPipeQ.deq;
         let txPower = phyTxReq.rfParam.power;
         let rxPower = txPower - unpack(pack(loss));  // power is signed, loss is unsigned
+        $display("rxPower:%d",rxPower);
         phyTxReq.rfParam.power = rxPower;
         phyRxReqQ.enq(phyTxReq);
     endrule

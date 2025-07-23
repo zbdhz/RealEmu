@@ -22,5 +22,5 @@ def generate_bram_log(file_path):
     
 
 if __name__ == '__main__':
-    generate_bram_duplicate("bram_one.txt", 1)
+    generate_bram_duplicate("bram_one.txt", 3)
     generate_bram_log("bram_gainloss_512.txt")
