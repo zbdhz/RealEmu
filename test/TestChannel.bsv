@@ -14,7 +14,7 @@ import PrimUtils::*;
 typedef 15000 Recv_delta_time;
 typedef 1000 Recv_time;
 typedef 12000 Print_time;
-typedef 100 TestNum;
+typedef 128 TestNum;
 
 
 function PhyEvent getEmptyPhyEvent();
@@ -36,9 +36,16 @@ endfunction
 function Action printPhyEvent(PhyEvent phy_event);
     // $display("srcPhyId: %0d", phy_event.srcPhyId);
     // $display("dstPhyId: %0d", phy_event.dstPhyId);
-    $display("rfParam: power = %0d, mcs = %0d", phy_event.rfParam.power, phy_event.rfParam.mcs);
+    // $display("rfParam: power = %0d, mcs = %0d", phy_event.rfParam.power, phy_event.rfParam.mcs);
     // $display("ppduLen: %0d", phy_event.ppduLen);
     // $display("mpduDigest: frameType = %0d, frameSubType = %0d, duration = %0d, length = %0d, cacheAddr = %0h", phy_event.mpduDigest.frameType, phy_event.mpduDigest.frameSubType, phy_event.mpduDigest.duration, phy_event.mpduDigest.length, phy_event.mpduDigest.cacheAddr);
+    $display("srcPhyId=%0d, dstPhyId=%0d, power=%0d, mcs=%0d, ppduLen=%0d, frameType=%0d, frameSubType=%0d, duration=%0d, length=%0d, cacheAddr=%0h",
+         phy_event.srcPhyId, phy_event.dstPhyId,
+         phy_event.rfParam.power, phy_event.rfParam.mcs,
+         phy_event.ppduLen,
+         phy_event.mpduDigest.frameType, phy_event.mpduDigest.frameSubType,
+         phy_event.mpduDigest.duration, phy_event.mpduDigest.length,
+         phy_event.mpduDigest.cacheAddr);
 endfunction
 
 module mkTestLogDistanceGainLossModel(Empty);
@@ -49,21 +56,22 @@ module mkTestLogDistanceGainLossModel(Empty);
     Reg#(UInt#(16)) pktIdx <- mkReg(0);
 
     // DUT: Channel 模块
-    let dut <- mkGainLossModelLogDistance("bram_one.txt");
+    let dut <- mkGainLossModelLogDistance("bram_sequence_1024.txt");
 
     // 模拟接收数据包
     rule recvPkt_local (cycleCount % fromInteger(valueOf(Recv_delta_time)) == fromInteger(valueOf(Recv_time)));
         let txReq = getEmptyPhyEvent();
+        txReq.srcPhyId = truncate(pack(pktIdx));
         dut.phyRxMetaSrv.request.put(txReq);
         pktIdx <= pktIdx + 1;
-        $display("Recv pkt id:%d",pktIdx+1);
+        $display("\nRecv pkt id:%d",pktIdx+1);
     endrule
 
     //处理数据包
     rule recvPkt_process;
         let rxReq <- dut.phyRxClt.request.get;
         printPhyEvent(rxReq);
-        $display("Recv pkt process sucess");
+        // $display("Recv pkt process sucess");
         // dut.phyRxClt.response.put(PhyRxResp{});
     endrule
 

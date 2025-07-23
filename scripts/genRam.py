@@ -6,6 +6,12 @@ def generate_bram_duplicate(file_path, num):
             f.write("%x\n" % num)
     print(file_path, "is done !")
 
+def generate_bram_sequence_hex(file_path, start=0, end=1023):
+    with open(file_path, 'w') as f:
+        for i in range(start, end + 1):
+            f.write("%x\n" % i)
+    print(file_path, "is done !")
+
 # Consider our distance distribution is [0, 65535]
 # the range of log is (-∞, 4.82]   
 # Set log(0) = 0, than the range is [0, 4.82], We need expand the range   
@@ -22,5 +28,6 @@ def generate_bram_log(file_path):
     
 
 if __name__ == '__main__':
-    generate_bram_duplicate("bram_one.txt", 3)
+    generate_bram_duplicate("bram_one.txt", 0)
+    generate_bram_sequence_hex("bram_sequence_1024.txt", 0, 1023)
     generate_bram_log("bram_gainloss_512.txt")

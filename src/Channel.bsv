@@ -120,7 +120,7 @@ String filename_location
         BRAM_Configure {                            
             memorySize   : 0,                       
             // loadFormat   : tagged Hex "bram_one.txt",
-            loadFormat   : tagged Hex "filename_location",     
+            loadFormat   : tagged Hex filename_location,      
             latency      : 2,                          
             outFIFODepth : 4,                          
             allowWriteResponseBypass : False           
@@ -168,7 +168,7 @@ String filename_location
         txPipeQ.deq;
         let txPower = phyTxReq.rfParam.power;
         let rxPower = txPower - unpack(pack(loss));  // power is signed, loss is unsigned
-        $display("rxPower:%d",rxPower);
+        $display("pathloss:%d",unpack(pack(loss)));
         phyTxReq.rfParam.power = rxPower;
         phyRxReqQ.enq(phyTxReq);
     endrule
