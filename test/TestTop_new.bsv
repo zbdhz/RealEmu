@@ -13,7 +13,7 @@ import PhyCoreSim::*;
 import Channel::*;
 import Arbitration::*;
 
-typedef 8 TEST_NODE_NUM;
+typedef 9 TEST_NODE_NUM;
 function String digitToChar(Integer d);
     case (d)
         0: return "0";

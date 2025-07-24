@@ -16,7 +16,7 @@ def generate_bram_distance_files():
     def int_dist(x1, y1, x2, y2):
         dx = abs(x1 - x2)
         dy = abs(y1 - y2)
-        return int(round(math.sqrt(dx * dx + dy * dy))) * 2  # 可改为 *1 或 *10 等
+        return int(round(math.sqrt(dx * dx + dy * dy))) * 4  # 可改为 *1 或 *10 等
 
     def write_bram_file(filename, distances):
         with open(filename, 'w') as f:
