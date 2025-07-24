@@ -126,7 +126,7 @@ module mkNav#(
     rule checkRtsTimeout;
         if (usGen.get && navReg > newNavReg && navReg > 0) begin
             navReg <= navReg - 1;
-            immLog("mkNav", "checkRtsTimeout" , $format("Node %0d: NAV decrease navReg = %0d", id , navReg));
+            // immLog("mkNav", "checkRtsTimeout" , $format("Node %0d: NAV decrease navReg = %0d", id , navReg));
         end
         else if (navReg < newNavReg)
             navReg <= newNavReg;
@@ -149,7 +149,7 @@ module mkNav#(
     endmethod
 
     method Action resetNav();
-        immLog("mkNav", "resetNav" , $format("Node %0d: Manual NAV reset", id));
+        // immLog("mkNav", "resetNav" , $format("Node %0d: Manual NAV reset", id));
     endmethod
 
     method Duration getNavValue() = navReg;
@@ -249,12 +249,12 @@ module mkCsmaCaBackOff#(
                             csmaStateReg <= CSMA_BACKOFF;
                             let randWaitTime <- expBackOffGen.next.get;
                             waitTimeReg <= randWaitTime;
-                            immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, Enter ExpWindow BackOff, randWaitTime = ", id, randWaitTime));
+                            // immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, Enter ExpWindow BackOff, randWaitTime = ", id, randWaitTime));
                         end
                         // 只进行IFS退避，无需进行随机退避
                         else begin
                             csmaStateReg <= CSMA_DONE;
-                            immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, BackOff Done without expWindow", id));
+                            // immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, BackOff Done without expWindow", id));
                         end
                     end
                     else if (usGen.get) begin
@@ -275,7 +275,7 @@ module mkCsmaCaBackOff#(
                 else begin
                     if(waitTimeReg == 0) begin
                         csmaStateReg <= CSMA_DONE;
-                        immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, BackOff Done", id));
+                        // immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, BackOff Done", id));
                     end
                     else if (slotGen.get) begin
                         waitTimeReg <= waitTimeReg - 1;
@@ -404,14 +404,14 @@ module mkMacDCF#(Integer id)(MacCore);
                     backOffFsm.start(tuple2(True, False)); //SIFS 
                     rxReq.status = True;
                     highMacRxReqQ.enq(rxReq);
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive DATA", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive DATA", id));
                 end
                 else if (isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
                     // 收到RTS帧，需要回复CTS，先退避SIFS
                     nextTask = NT_SEND_CTS;
                     state = DCF_WAIT_BACKOFF;
                     backOffFsm.start(tuple2(True, False)); //SIFS 
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive RTS", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive RTS", id));
                 end
                 else if (!isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
                     navController.handleFrame(rxReq);       //新增nav逻辑
@@ -444,7 +444,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     // 发送了RTS，并且已经收到了CTS
                         backOffFsm.start(tuple2(True, False)); //SIFS 
                         nextTask = NT_SEND_DATA;
-                        immLog("mkMacDcf", "dcfFSM", $format("Id %5d, CTS SIFS", id));
+                        // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, CTS SIFS", id));
                     end
                     // else do nothing 
                     state = DCF_WAIT_BACKOFF;
@@ -472,7 +472,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     lowMacTxReqQ.enq(rtsFrame);
                     dcfStateReg <= DCF_RECV_CTSACK;
                     nextTaskReg <= NT_RECV_CTS;
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send RTS", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send RTS", id));
                     end
                 NT_SEND_DATA: begin
                     // 已经收到过CTS，或者无需RTS/CRS, 发送Data
@@ -480,7 +480,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     lowMacTxReqQ.enq(refFrame);
                     dcfStateReg <= DCF_RECV_CTSACK;
                     nextTaskReg <= NT_RECV_ACK;
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send Data", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send Data", id));
                 end
                 NT_SEND_CTS: begin
                     // 回复CTS
@@ -491,7 +491,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     lowMacTxReqQ.enq(ctsFrame);
                     dcfStateReg <= DCF_IDLE;
                     nextTaskReg <= NT_RECV_DATA;
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send CTS", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send CTS", id));
                 end
                 NT_SEND_ACK: begin
                     // 回复ACK
@@ -504,7 +504,7 @@ module mkMacDCF#(Integer id)(MacCore);
                         dcfStateReg <= DCF_IDLE;
                         nextTaskReg <= NT_IDLE;
                     end
-                immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send ACK", id));
+                // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send ACK", id));
                 end
                 endcase
             end
@@ -520,7 +520,7 @@ module mkMacDCF#(Integer id)(MacCore);
             if (lowMacRxReqQ.notEmpty) begin
                 if (isMyFrame(id, rxReq.dstMacId) && isCtsFrame(rxReq.mpduDigest)) begin
                     // 收到了CTS，准备发送DATA
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive CTS", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive CTS", id));
                     lowMacRxReqQ.deq;
                     lowMacRxRespQ.enq(GenericResp{});
                     state = DCF_IDLE;
@@ -529,7 +529,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 else if (isMyFrame(id, rxReq.dstMacId) && isAckFrame(rxReq.mpduDigest)) begin
                     // 收到了ACK，结束一次发送
                     // TODO: Block ACK 如何处理？？
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive ACK", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive ACK", id));
                     lowMacRxReqQ.deq;
                     lowMacRxRespQ.enq(GenericResp{});
                     backOffFsm.resetCW;  // 重置窗口
@@ -549,7 +549,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 if (retransCountReg < macCfgReg.retryLimit) begin
                     retransCountReg <= retransCountReg + 1;
                     backOffFsm.incrCW;  // 失败后增大退避窗口
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
                     state = DCF_IDLE;
                     nextTask = NT_IDLE;
                 end 
@@ -561,7 +561,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     nextTask = NT_IDLE;
                     highMacTxReqQ.deq;
                     let txReq = highMacTxReqQ.first;
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
+                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
                     txReq.status = False;
                     // highMacRxReqQ.enq(txReq);
                 end

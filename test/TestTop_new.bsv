@@ -13,13 +13,57 @@ import PhyCoreSim::*;
 import Channel::*;
 import Arbitration::*;
 
-// typedef 8 NODE_NUM;
+typedef 8 TEST_NODE_NUM;
+function String digitToChar(Integer d);
+    case (d)
+        0: return "0";
+        1: return "1";
+        2: return "2";
+        3: return "3";
+        4: return "4";
+        5: return "5";
+        6: return "6";
+        7: return "7";
+        8: return "8";
+        9: return "9";
+        default: return "?";
+    endcase
+endfunction
+
+function String intToString(Integer val);
+    if (val < 10) begin
+        return digitToChar(val);
+    end else if (val < 100) begin
+        Integer tens = val / 10;
+        Integer ones = val % 10;
+        return digitToChar(tens) + digitToChar(ones);
+    end else if (val < 1000) begin
+        Integer hundreds = val / 100;
+        Integer rem = val % 100;
+        Integer tens = rem / 10;
+        Integer ones = rem % 10;
+        return digitToChar(hundreds) + digitToChar(tens) + digitToChar(ones);
+    end else if (val == 1000) begin
+        return "1000";
+    end else if (val == 1023) begin
+        return "1023";
+    end else begin
+        return "???";
+    end
+endfunction
+
 
 module mkTestTop(Empty);
     // ==================== 节点实例化 ====================
         Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
         Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
-        Vector#(NODE_NUM, GainLossModel) channels <- replicateM(mkGainLossModelIdeal);
+        // Vector#(NODE_NUM, GainLossModel) channels <- replicateM(mkGainLossModelIdeal);
+        Vector#(NODE_NUM, GainLossModel) channels;
+        for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
+            let fname = "bram_" + intToString(i) + ".txt";
+            channels[i] <- mkGainLossModelLogDistance(fname);
+        end
+
         ArbiterIFC pollController <- mkArbiter;
 
         Reg#(UInt#(10)) sendingNodes <- mkReg(1);     // 总接收包数
@@ -29,6 +73,12 @@ module mkTestTop(Empty);
         Reg#(File) logFile <- mkReg(InvalidFile);     // 日志文件句柄
 
         // ==================== 初始化 ====================
+        // rule printFilenamesOnce (cycleCount == 5);
+        //     for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+        //         $display("Opening file: bram_%0d.txt", i);
+        //     end
+        // endrule
+
         rule initialize (cycleCount == 10);
             let fd <- $fopen("/home/emu/dev/RealEmu/scripts/throughout.txt", "w");
             logFile <= fd;
@@ -61,7 +111,7 @@ module mkTestTop(Empty);
             endrule
         end
 
-        for (UInt#(10) i = 1; i < fromInteger(valueOf(NODE_NUM)); i = i + 1)begin
+        for (UInt#(10) i = 1; i < fromInteger(valueOf(TEST_NODE_NUM)); i = i + 1)begin
             rule send if(i<=sendingNodes);
                 let txReq = getEmptyMacEvent;
                 txReq.srcMacId = unpack(pack(i));
@@ -72,21 +122,27 @@ module mkTestTop(Empty);
                 txReq.mpduDigest.length = 2048; //使长度变化，用于每次打印出不同的rxReq
                 txReq.rfParam.mcs = 7;
                 macNodes[i].highMacTxSrv.request.put(txReq);
+                $display("Sent packet from %0d to %d", txReq.srcMacId, txReq.dstMacId);
+                $fwrite(logFile, "Sent packet from %0d to %d\n", txReq.srcMacId, txReq.dstMacId);
             endrule
         end
 
         rule receive;
             let rxReq <- macNodes[0].highMacRxClt.request.get;
+            $display("Received packet from %d, the power is %d", rxReq.srcMacId, rxReq.rfParam.power);
+            $fwrite(logFile,"Received packet from %d, the power is %d\n", rxReq.srcMacId, rxReq.rfParam.power);
             totalReceived <= totalReceived + 1;
         endrule
 
         rule logThroughput if((cycleCount % (1000*1000) == 0) && logFile != InvalidFile);
             let throughput = pack(totalReceived);
-            $fwrite(logFile, "%0d\n", throughput);
+            // $fwrite(logFile, "%0d\n", throughput);
+            $fwrite(logFile, "sendingNodes: %d\n", sendingNodes);
+
             sendingNodes <= sendingNodes + 1; 
         endrule
 
-        rule simEnd if(sendingNodes == fromInteger(valueOf(NODE_NUM)));
+        rule simEnd if(sendingNodes == fromInteger(valueOf(TEST_NODE_NUM)));
             $display("end");
             $finish();
         endrule
