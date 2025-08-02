@@ -3,7 +3,7 @@ include ../Makefile.base
 # TESTFILE ?= TestChannel.bsv
 # TOPMODULE ?= mkTestLogDistanceGainLossModel
 
-TESTFILE ?= TestTop_new.bsv
+TESTFILE ?= TestTop_new.bsv 
 TOPMODULE ?= mkTestTop
 
 # TESTFILE ?= TestPhySinrStats.bsv
