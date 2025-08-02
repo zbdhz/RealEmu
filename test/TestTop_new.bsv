@@ -52,6 +52,7 @@ function String intToString(Integer val);
     end
 endfunction
 
+`define BSIM;
 
 module mkTestTop(Empty);
     // ==================== 节点实例化 ====================
@@ -83,7 +84,7 @@ module mkTestTop(Empty);
             let fd <- $fopen("/home/emu/dev/RealEmu/scripts/throughout.txt", "w");
             logFile <= fd;
         endrule
-
+        // ==================== 时钟计数 ====================
         rule updateclock;
             cycleCount <= cycleCount + 1;
         endrule
@@ -110,7 +111,7 @@ module mkTestTop(Empty);
                 let resp <- macNodes[i].highMacTxSrv.response.get;
             endrule
         end
-
+        // ==================== 发包规则 ====================
         for (UInt#(10) i = 1; i < fromInteger(valueOf(TEST_NODE_NUM)); i = i + 1)begin
             rule send if(i<=sendingNodes);
                 let txReq = getEmptyMacEvent;
