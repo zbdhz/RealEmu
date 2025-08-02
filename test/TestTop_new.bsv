@@ -13,7 +13,7 @@ import PhyCoreSim::*;
 import Channel::*;
 import Arbitration::*;
 
-typedef 9 TEST_NODE_NUM;
+typedef 64 TEST_NODE_NUM;
 function String digitToChar(Integer d);
     case (d)
         0: return "0";
@@ -112,32 +112,32 @@ module mkTestTop(Empty);
         end
 
         for (UInt#(10) i = 1; i < fromInteger(valueOf(TEST_NODE_NUM)); i = i + 1)begin
-            rule send if(i<=sendingNodes);
+            rule send if(i<=sendingNodes && logFile != InvalidFile);
                 let txReq = getEmptyMacEvent;
                 txReq.srcMacId = unpack(pack(i));
                 txReq.dstMacId = 0;
                 txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
                 //txReq.mpduDigest.length = 2048;
-                txReq.rfParam.power = 60*32;
+                txReq.rfParam.power = 60*32;//1920
                 txReq.mpduDigest.length = 2048; //使长度变化，用于每次打印出不同的rxReq
                 txReq.rfParam.mcs = 7;
                 macNodes[i].highMacTxSrv.request.put(txReq);
-                $display("Sent packet from %0d to %d", txReq.srcMacId, txReq.dstMacId);
-                $fwrite(logFile, "Sent packet from %0d to %d\n", txReq.srcMacId, txReq.dstMacId);
+                $display("Sent packet from %d to %d", txReq.srcMacId, txReq.dstMacId);
+                $fwrite(logFile, "[%8d ns] Sent packet from %0d to %0d\n",$time,  txReq.srcMacId, txReq.dstMacId);
             endrule
         end
 
         rule receive;
             let rxReq <- macNodes[0].highMacRxClt.request.get;
             $display("Received packet from %d, the power is %d", rxReq.srcMacId, rxReq.rfParam.power);
-            $fwrite(logFile,"Received packet from %d, the power is %d\n", rxReq.srcMacId, rxReq.rfParam.power);
+            $fwrite(logFile,"[%8d ns] Received packet from %0d, the power is %0d\n", $time, rxReq.srcMacId, rxReq.rfParam.power);
             totalReceived <= totalReceived + 1;
         endrule
 
         rule logThroughput if((cycleCount % (1000*1000) == 0) && logFile != InvalidFile);
             let throughput = pack(totalReceived);
             // $fwrite(logFile, "%0d\n", throughput);
-            $fwrite(logFile, "sendingNodes: %d\n", sendingNodes);
+            $fwrite(logFile, "================================\n[%8d ns] sendingNodes: %0d, totalReceived: %0d\n================================\n", $time, sendingNodes, throughput);
 
             sendingNodes <= sendingNodes + 1; 
         endrule

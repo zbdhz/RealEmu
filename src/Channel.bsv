@@ -158,7 +158,7 @@ String filename_location
     rule queryLoss;
         let distance <- distanceRam2.portB.response.get;
         lossTable.request.put(unpack(distance));
-        $display("diatance:%d",distance);
+        // $display("diatance:%d",distance);
     endrule
 
     //loss = 20lg(d);
@@ -168,7 +168,7 @@ String filename_location
         txPipeQ.deq;
         let txPower = phyTxReq.rfParam.power;
         let rxPower = txPower - unpack(pack(loss));  // power is signed, loss is unsigned
-        $display("pathloss:%d",unpack(pack(loss)));
+        // $display("pathloss:%d",unpack(pack(loss)));
         phyTxReq.rfParam.power = rxPower;
         phyRxReqQ.enq(phyTxReq);
     endrule
