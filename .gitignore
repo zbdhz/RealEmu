@@ -11,3 +11,4 @@ generate
 *.o
 *.txt
 __pycache__
+/Makefile

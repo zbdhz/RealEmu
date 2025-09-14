@@ -12,8 +12,17 @@ PARTNAME = xcvu13p-fhgb2104-2-i
 # TARGETFILE ?= ../src/BsvTop.bsv
 # TOPMODULE ?= mkRawEmuCore
 
-TARGETFILE ?= ../src/PhyCore.bsv
-TOPMODULE ?= mkPhyYansWifi
+# TARGETFILE ?= ../src/PhyCore.bsv
+# TOPMODULE ?= mkPhyYansWifi
+
+# TARGETFILE ?= ../src/Channel.bsv
+# TOPMODULE ?= mkGainLossModelLogDistance
+
+# TARGETFILE ?= ../src/Arbitration.bsv
+# TOPMODULE ?= mkArbiter
+
+TARGETFILE ?= ../src/MacBridge.bsv
+TOPMODULE ?= mkMacBridge
 
 BACKENDDIR ?= .
 MAX_NET_PATH_NUM ?= 10000

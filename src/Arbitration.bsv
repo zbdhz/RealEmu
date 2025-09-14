@@ -12,6 +12,8 @@ import MathUtils::*;
 
 import Types::*;
 
+// typedef 64 NODE_NUM;
+
 typedef TLog#(NODE_NUM) NodeIdWidth;  // 10 bits
 typedef TDiv#(TLog#(NODE_NUM), TLog#(GROUP_SIZE)) TreeDepth;  // log32(1024)=2
 
@@ -116,7 +118,7 @@ module mkArbiter(ArbiterIFC);
     // 最终广播分发
     ///////////////////////////////////////////////////////////////////////////
     rule finalBroadcast;
-        for (Integer g = 0; g < valueOf(GROUP_SIZE); g = g + 1) begin
+        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
             for (Integer gr = 0; gr < valueOf(GROUP_SIZE); gr = gr + 1) begin
                 let index = g*valueOf(GROUP_SIZE) + gr;
                 let {valid, txEvent} = deMuxRegs[g];
