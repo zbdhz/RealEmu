@@ -39,33 +39,33 @@ module mkTestMacBridge(Empty);
 
     let macBridge <- mkMacBridge;
 
-    // rule pkt_send_pcie (cycleCount%1000 == 0);
-    //     let pkt = getEmptyMacEvent;
-    //     pkt.srcMacId = 3;
-    //     pkt.dstMacId = 1;
-    //     macBridge.pcieTxSrv.request.put(pkt);
-    //     $display("pkt_send_pcie: %x", pkt);
-    // endrule
-
-    // rule pkt_send_mac;
-    //     let pkt <- macBridge.macTxClt[3].request.get;
-    //     $display("pkt_send_mac: %x", pkt);
-    // endrule
-    
-    
-    rule pkt_Recv_mac;
+    rule pkt_send_pcie (cycleCount%1000 == 0);
         let pkt = getEmptyMacEvent;
         pkt.srcMacId = 3;
         pkt.dstMacId = 1;
-        macBridge.macRxSrv[1].request.put(pkt);
-        $display("pkt_Recv_mac: %x", pkt);
-        printMacEvent(pkt); 
+        macBridge.pcieTxSrv.request.put(pkt);
+        $display("pkt_send_pcie: %x", pkt);
     endrule
 
-    rule pkt_Recv_pcie (cycleCount%1000 == 0);
-        let pkt <- macBridge.pcieRxClt.request.get;
-        $display("pkt_Recv_pcie: %x", pkt);
+    rule pkt_send_mac;
+        let pkt <- macBridge.macTxClt[3].request.get;
+        $display("pkt_send_mac: %x", pkt);
     endrule
+    
+    
+    // rule pkt_Recv_mac;
+    //     let pkt = getEmptyMacEvent;
+    //     pkt.srcMacId = 3;
+    //     pkt.dstMacId = 1;
+    //     macBridge.macRxSrv[1].request.put(pkt);
+    //     $display("pkt_Recv_mac: %x", pkt);
+    //     printMacEvent(pkt); 
+    // endrule
+
+    // rule pkt_Recv_pcie (cycleCount%1000 == 0);
+    //     let pkt <- macBridge.pcieRxClt.request.get;
+    //     $display("pkt_Recv_pcie: %x", pkt);
+    // endrule
 
     rule txhandshake_pcie;
         let rsp <- macBridge.pcieTxSrv.response.get;

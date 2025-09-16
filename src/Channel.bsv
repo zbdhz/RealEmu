@@ -46,7 +46,8 @@ endinterface
 
 interface GainLossModel_Ctrl;
     interface GainLossModel channel;
-    interface BRAMServer#(Bit#(DEV_ID_WIDTH), NodeDistance) configPort;
+    // interface BRAMServer#(Bit#(DEV_ID_WIDTH), NodeDistance) configPort;
+    interface ChanSrv chanTxSrv;
 endinterface
 // interface ConfigPort;
 //     interface BRAMServer#(Bit#(DEV_ID_WIDTH), NodeDistance) configPort;
@@ -112,6 +113,9 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
     FIFO#(PhyEvent)    rxReqQ  <- mkFIFO;
     FIFO#(GenericResp) rxRespQ <- mkFIFO;
 
+    FIFO#(ChannelCfg)  chancfgTxReqQ   <- mkFIFO;
+    FIFO#(GenericResp) chancfgTxRespQ  <- mkFIFO;
+
     FIFO#(PhyEvent)    txPipeQ   <- mkSizedFIFO(valueOf(FSModelPipeDepth));
     Rom1port#(NodeDistance,UInt#(12)) lossTable <- mkSingleRom("20lgd.mem");
 
@@ -171,6 +175,21 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
         phyTxReq.rfParam.power = rxPower;
         phyRxReqQ.enq(phyTxReq);
     endrule
+    
+    //更新channel配置
+    rule updateChannelConfig;
+        let chancfg = chancfgTxReqQ.first;
+        chancfgTxReqQ.deq;
+        chancfgTxRespQ.enq(GenericResp{});
+        let bramReq = BRAMRequest {
+                write: True,
+                responseOnWrite: False,
+                address: truncate(pack(chancfg.srcPhyId)),
+                datain: truncate(pack(chancfg.distance))
+            };
+        distanceRam2.portA.request.put(bramReq);
+        $display("channel config: srcPhyId=%d, dstPhyId=%d, distance=%d", chancfg.srcPhyId, chancfg.dstPhyId, chancfg.distance);
+    endrule
 
     rule handshakeRx;
         phyRxRespQ.deq;
@@ -180,6 +199,8 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
         txRespQ.deq;
     endrule
 
+    
+
     interface GainLossModel channel;
         // 实现GainLossModel子接口
         interface phyTxSrv    = toGPServer(phyTxReqQ, phyTxRespQ);
@@ -188,8 +209,10 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
         interface phyRxMetaSrv = toGPServer(rxReqQ, rxRespQ);
     endinterface
 
+    //实现ChannelCfg子接口
+    interface chanTxSrv    = toGPServer(chancfgTxReqQ, chancfgTxRespQ);
     // 暴露BRAM端口A作为配置接口
-    interface configPort = distanceRam2.portA;
+    // interface configPort = distanceRam2.portA;
 
 endmodule
 

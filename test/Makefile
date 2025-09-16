@@ -3,14 +3,14 @@ include ../Makefile.base
 # TESTFILE ?= TestChannel.bsv
 # TOPMODULE ?= mkTestLogDistanceGainLossModel
 
-#TESTFILE ?= TestTop_new.bsv 
-# TOPMODULE ?= mkTestTop
+TESTFILE ?= TestTop_new.bsv 
+TOPMODULE ?= mkTestTop
 
 # TESTFILE ?= TestPhySinrStats.bsv
 # TOPMODULE ?= mkTestPhySinrStats
 
-TESTFILE ?= TestMacBridge.bsv
-TOPMODULE ?= mkTestMacBridge
+# TESTFILE ?= TestMacBridge.bsv
+# TOPMODULE ?= mkTestMacBridge
 
 SCRIPT_DIR = ../scripts
 MEM_DIR = ../mem

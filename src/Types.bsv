@@ -296,3 +296,19 @@ typedef struct {
     LogDistParaN  n;
     LogDistPataL0 l0;
 }LogDistanceParam deriving(Eq, Bits, Bounded, FShow);
+
+typedef struct {
+    PhyId srcPhyId;
+    PhyId dstPhyId;
+    NodeDistance distance;
+}ChannelCfg deriving(Eq, Bits, Bounded, FShow);
+
+function ChannelCfg getEmptyChannelCfg();
+    return ChannelCfg{
+        srcPhyId  : 0, 
+        dstPhyId  : 0, 
+        distance  : 1};
+endfunction
+
+typedef Server#(ChannelCfg, GenericResp) ChanSrv;
+typedef Client#(ChannelCfg, GenericResp) ChanClt;

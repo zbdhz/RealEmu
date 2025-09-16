@@ -129,7 +129,7 @@ module mkMacBridge(MacBridgeIFC);
         if(finalValid && qMacRxReqQ[selectId].notEmpty)begin
             qMacRxReqQ[selectId].deq;
             qMacRxRespQ[selectId].enq(GenericResp{});
-            $display("rx_level_2: %x", finalEvent);
+            // $display("rx_level_2: %x", finalEvent);
         end
     endrule
 
@@ -141,7 +141,7 @@ module mkMacBridge(MacBridgeIFC);
         let {valid, rxEvent} = deMuxReg1;
         if(valid)begin
             pcieRxReqQ.enq(rxEvent);
-            $display("rx_upload: %x", rxEvent);
+            // $display("rx_upload: %x", rxEvent);
         end
     
     endrule
@@ -163,6 +163,7 @@ module mkMacBridge(MacBridgeIFC);
     rule txProcess;
         let txReq = pcieTxReqQ.first;
         pcieTxReqQ.deq;
+        // $display("macbrigdge rx ok!!!");
         pcieTxRespQ.enq(GenericResp{});
         deMuxReg2 <= tuple2(True, txReq);
     endrule
@@ -173,7 +174,7 @@ module mkMacBridge(MacBridgeIFC);
         for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
             validRegs2[g] <= valid;
             eventRegs2[g] <= txEvent;
-
+            // $display("macbridge tx_broadcast OK! srcMacId: %x",txEvent.srcMacId);
         end
     endrule
 
@@ -186,6 +187,7 @@ module mkMacBridge(MacBridgeIFC);
                 let txEvent = eventRegs2[g];
                 if (valid && txEvent.srcMacId == fromInteger(index)) begin
                     qMacTxReqQ[index].enq(txEvent);
+                    // $display("macbrigdge tx ok!!!");
                 end
             end
         end

@@ -21,8 +21,11 @@ PARTNAME = xcvu13p-fhgb2104-2-i
 # TARGETFILE ?= ../src/Arbitration.bsv
 # TOPMODULE ?= mkArbiter
 
-TARGETFILE ?= ../src/MacBridge.bsv
-TOPMODULE ?= mkMacBridge
+# TARGETFILE ?= ../src/MacBridge.bsv
+# TOPMODULE ?= mkMacBridge
+
+TARGETFILE ?= ../src/CfgBridge.bsv
+TOPMODULE ?= mkCfgBridge
 
 BACKENDDIR ?= .
 MAX_NET_PATH_NUM ?= 10000
