@@ -20,6 +20,7 @@ import Arbitration::*;
 import MacBridge::*;
 import CfgBridge::*;
 import BsvTop::*;
+
 typedef 8 TEST_NODE_NUM;
 function String digitToChar(Integer d);
     case (d)
@@ -65,11 +66,11 @@ module mkTestRawEmuCore(Empty);
     let core <- mkEmuCore;
 
     Reg#(MacId) sendingNodes <- mkReg(1);     // 总接收包数
-    // Reg#(UInt#(10)) sendingNodes <- mkReg(1);     // 总接收包数
-    // // 初始化索引
-    // Reg#(UInt#(32)) initIdx <- mkReg(0);
-    // // 初始化完成标志
-    // Reg#(Bool) initialized <- mkReg(False);
+
+    // 初始化索引
+    Reg#(UInt#(32)) initIdx <- mkReg(0);
+    // 初始化完成标志
+    Reg#(Bool) initialized <- mkReg(False);
     // ==================== 控制寄存器 ====================
     Reg#(UInt#(64)) cycleCount <- mkReg(3);
     Reg#(UInt#(64)) totalReceived <- mkReg(0);     // 总接收包数
@@ -85,59 +86,38 @@ module mkTestRawEmuCore(Empty);
         cycleCount <= cycleCount + 1;
     endrule
 
-    // ==================== 节点连接 ====================
-    // for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
-    //     mkConnection(macNodes[i].lowMacTxClt, phyNodes[i].lowMacTxSrv);
-    //     mkConnection(macNodes[i].lowMacRxSrv, phyNodes[i].lowMacRxClt);
-    //     mkConnection(phyNodes[i].phyTxClt, channels[i].channel.phyTxSrv);
-    //     mkConnection(phyNodes[i].phyRxSrv, channels[i].channel.phyRxClt);
-    //     mkConnection(pollController.phyTxMetaClt[i], channels[i].channel.phyRxMetaSrv);
-    //     mkConnection(pollController.phyRxMetaSrv[i], channels[i].channel.phyTxMetaClt);
-
-    //     mkConnection(macbridge.macTxClt[i], macNodes[i].highMacTxSrv);
-    //     mkConnection(macbridge.macRxSrv[i], macNodes[i].highMacRxClt);
-        
-    //     mkConnection(cfgbridge.chanTxClt[i], channels[i].chanTxSrv);
-    // end
-    
-    // rule updatePhyStatus;
-    //     for (Integer i = 0; i < valueof(NODE_NUM); i = i + 1) begin
-    //         let phyStatus = phyNodes[i].getPhyStatus;
-    //         macNodes[i].phyStatus.put(phyStatus);
-    //     end
-    // endrule
-
+    // ==================== 节点初始化 ====================
     // 初始化BRAM规则
-    // rule initializeBRAM (!initialized);
-    //     if (initIdx < fromInteger(valueOf(NODE_NUM))) begin
-    //         // 为每个节点设置距离值，这里使用简单的计算方式
-    //         let distance = (initIdx < 256) ? 
-    //                     1*(1 + initIdx ) : 
-    //                     100;
+    rule initializeBRAM (!initialized && cycleCount % (100000) == 0);
+        if (initIdx < fromInteger(valueOf(NODE_NUM))) begin
+            // 为每个节点设置距离值，这里使用简单的计算方式
+            let distance = (initIdx < 256) ? 
+                        1*(1 + initIdx ) : 
+                        100;
 
-    //         let chancfg = getEmptyChannelCfg;
-    //         chancfg.srcPhyId = truncate(pack(initIdx));
-    //         chancfg.dstPhyId = 0;
-    //         chancfg.distance = truncate(pack(distance));
-    //         cfgbridge.chanTxSrv.request.put(chancfg);
-    //         initIdx <= initIdx + 1;
-    //         $display("Initializing node %0d with distance %0d", initIdx, distance);
-    //     end else begin
-    //         initialized <= True;
-    //         $display("BRAM initialization completed");
-    //     end
-    // endrule
-
-    // rule handshake_macbridge;
-    //     let resp_macbridge <- macbridge.pcieTxSrv.response.get;
-    // endrule
-
-    // rule handshake_cfgbridge;
-    //     let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
-    // endrule
-
+            let chancfg = getEmptyChannelCfg;
+            chancfg.srcPhyId = truncate(pack(initIdx));
+            chancfg.dstPhyId = 0;
+            chancfg.distance = truncate(pack(distance));
+            let bridgeTag = getEmptyBridgeTag();
+            bridgeTag.control = 1;
+            AxiStream#(KEEP_WIDTH, TUSER_WIDTH) axiPkt = AxiStream{
+                tData: zeroExtend(pack(tuple2(bridgeTag, chancfg))),
+                tKeep: '1,      // 所有字节有效
+                tLast: True,     // 假设每个MAC事件对应一个AXI包
+                tUser: 0
+            };
+            core.tx.put(axiPkt);
+            // cfgbridge.chanTxSrv.request.put(chancfg);
+            initIdx <= initIdx + 1;
+            $display("Initializing node %0d with distance %0d", initIdx, distance);
+        end else begin
+            initialized <= True;
+            $display("BRAM initialization completed");
+        end
+    endrule
     // ==================== 发包规则 ====================
-    rule send if(logFile != InvalidFile && cycleCount % (100*1000) == 0);
+    rule send if(initialized && logFile != InvalidFile && cycleCount % (100*1000) == 0);
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = sendingNodes;
         txReq.dstMacId = 0;
@@ -171,7 +151,7 @@ module mkTestRawEmuCore(Empty);
         totalReceived <= totalReceived + 1;
     endrule
 
-    rule logThroughput if((cycleCount % (1000*1000) == 0) && logFile != InvalidFile);
+    rule logThroughput if(initialized && (cycleCount % (1000*1000) == 0) && logFile != InvalidFile);
         let throughput = pack(totalReceived);
         // $fwrite(logFile, "%0d\n", throughput);
         $fwrite(logFile, "================================\n[%8d ns] sendingNodes: %0d, totalReceived: %0d\n================================\n", $time, sendingNodes, throughput);

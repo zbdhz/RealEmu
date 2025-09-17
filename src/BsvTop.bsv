@@ -84,10 +84,10 @@ module mkEmuCore(EmuCore);
     CfgBridgeIFC cfgbridge <- mkCfgBridge;
     ArbiterIFC pollController <- mkArbiter;
 
-    // 初始化索引
-    Reg#(UInt#(32)) initIdx <- mkReg(0);
-    //初始化完成标志
-    Reg#(Bool) initialized <- mkReg(False);
+    // // 初始化索引
+    // Reg#(UInt#(32)) initIdx <- mkReg(0);
+    // //初始化完成标志
+    // Reg#(Bool) initialized <- mkReg(False);
 
     // ====================   节点连接   ====================
     for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
@@ -120,6 +120,7 @@ module mkEmuCore(EmuCore);
             tLast: True,     // 假设每个MAC事件对应一个AXI包
             tUser: 0
         };
+        // $display("macbridge rx ok");
         bridge2AxiFifo.enq(axiPkt);  // 存入发送FIFO
     endrule
 
@@ -130,41 +131,41 @@ module mkEmuCore(EmuCore);
         BridgeTag bridgeTag = unpack(truncate(axiPkt.tData));
         case (bridgeTag.control) matches
             1:begin
-                // BridgeTag bridgeTag_in;
-                // ChannelCfg chancfg;
-                // {bridgeTag_in, chancfg} = unpack(truncate(axiPkt.tData));
-                // cfgbridge.chanTxSrv.request.put(chancfg);
+                BridgeTag bridgeTag_in;
+                ChannelCfg chancfg;
+                {bridgeTag_in, chancfg} = unpack(truncate(axiPkt.tData));
+                cfgbridge.chanTxSrv.request.put(chancfg);
             end
             0:begin
                 BridgeTag bridgeTag_in;
                 MacEvent macEvent;
                 {bridgeTag_in, macEvent} = unpack(truncate(axiPkt.tData));
                 macbridge.pcieTxSrv.request.put(macEvent);
+                // $display("macbridge tx ok");
             end
         endcase
     endrule
 
-    // 初始化BRAM规则
-    
-    rule initializeBRAM (!initialized);
-        if (initIdx < fromInteger(valueOf(NODE_NUM))) begin
-            // 为每个节点设置距离值，这里使用简单的计算方式
-            let distance = (initIdx < 256) ? 
-                        1*(1 + initIdx ) : 
-                        100;
+    // // 初始化BRAM规则
+    // rule initializeBRAM (!initialized);
+    //     if (initIdx < fromInteger(valueOf(NODE_NUM))) begin
+    //         // 为每个节点设置距离值，这里使用简单的计算方式
+    //         let distance = (initIdx < 256) ? 
+    //                     1*(1 + initIdx ) : 
+    //                     100;
 
-            let chancfg = getEmptyChannelCfg;
-            chancfg.srcPhyId = truncate(pack(initIdx));
-            chancfg.dstPhyId = 0;
-            chancfg.distance = truncate(pack(distance));
-            cfgbridge.chanTxSrv.request.put(chancfg);
-            initIdx <= initIdx + 1;
-            // $display("Initializing node %0d with distance %0d", initIdx, distance);
-        end else begin
-            initialized <= True;
-            // $display("BRAM initialization completed");
-        end
-    endrule
+    //         let chancfg = getEmptyChannelCfg;
+    //         chancfg.srcPhyId = truncate(pack(initIdx));
+    //         chancfg.dstPhyId = 0;
+    //         chancfg.distance = truncate(pack(distance));
+    //         cfgbridge.chanTxSrv.request.put(chancfg);
+    //         initIdx <= initIdx + 1;
+    //         // $display("Initializing node %0d with distance %0d", initIdx, distance);
+    //     end else begin
+    //         initialized <= True;
+    //         // $display("BRAM initialization completed");
+    //     end
+    // endrule
         
     rule handshake_macbridge;
         let resp_macbridge <- macbridge.pcieTxSrv.response.get;
@@ -173,7 +174,7 @@ module mkEmuCore(EmuCore);
     rule handshake_cfgbridge;
         let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
     endrule
-    
+
     interface rx = toGet(bridge2AxiFifo);  // 绑定发送接口
     interface tx = toPut(axi2BridgeFifo);  // 绑定接收接口
 endmodule
