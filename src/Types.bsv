@@ -312,3 +312,22 @@ endfunction
 
 typedef Server#(ChannelCfg, GenericResp) ChanSrv;
 typedef Client#(ChannelCfg, GenericResp) ChanClt;
+
+// ======================================== Bridge Types ====================================
+
+typedef 1 CONTROL_FLAG_WIDTH;
+typedef 7 NOTUSED_FLAG_WIDTH;
+
+typedef Bit#(CONTROL_FLAG_WIDTH) CONTROL_FLAG;
+typedef Bit#(CONTROL_FLAG_WIDTH) NOTUSED_FLAG;
+
+typedef struct {
+    CONTROL_FLAG control;
+    NOTUSED_FLAG notUsed;
+} BridgeTag deriving(Eq, Bits, Bounded, FShow);
+
+function BridgeTag getEmptyBridgeTag();
+    return BridgeTag{
+        control: 0,
+        notUsed: 0};
+endfunction

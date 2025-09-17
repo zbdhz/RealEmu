@@ -9,8 +9,8 @@ LOGFILE ?= run.log
 RUNTOPHASE ?= all # synth place route all
 PARTNAME = xcvu13p-fhgb2104-2-i
 
-# TARGETFILE ?= ../src/BsvTop.bsv
-# TOPMODULE ?= mkRawEmuCore
+TARGETFILE ?= ../src/BsvTop.bsv
+TOPMODULE ?= mkRawEmuCore
 
 # TARGETFILE ?= ../src/PhyCore.bsv
 # TOPMODULE ?= mkPhyYansWifi
@@ -24,8 +24,8 @@ PARTNAME = xcvu13p-fhgb2104-2-i
 # TARGETFILE ?= ../src/MacBridge.bsv
 # TOPMODULE ?= mkMacBridge
 
-TARGETFILE ?= ../src/CfgBridge.bsv
-TOPMODULE ?= mkCfgBridge
+# TARGETFILE ?= ../src/CfgBridge.bsv
+# TOPMODULE ?= mkCfgBridge
 
 BACKENDDIR ?= .
 MAX_NET_PATH_NUM ?= 10000
