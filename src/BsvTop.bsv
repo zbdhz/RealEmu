@@ -76,6 +76,9 @@ module mkEmuCore(EmuCore);
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) bridge2AxiFifo <- mkFIFOF; // 发送数据缓冲
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo <- mkFIFOF; // 接收数据缓冲
 
+    FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_mac <- mkFIFOF; // 接收数据缓冲
+    FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_cfg <- mkFIFOF; // 接收数据缓冲
+
     Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
     Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
     Vector#(NODE_NUM, GainLossModel_Ctrl) channels <- replicateM(mkGainLossModelLogDistance);
@@ -125,26 +128,89 @@ module mkEmuCore(EmuCore);
     endrule
 
     //从AXI接收数据并转发到 Bridge
-    rule forward_axi_to_Bridge;
+    rule forward_axi_to_bridge; 
         let axiPkt = axi2BridgeFifo.first;
         axi2BridgeFifo.deq;
-        BridgeTag bridgeTag = unpack(truncate(axiPkt.tData));
-        case (bridgeTag.control) matches
-            1:begin
-                BridgeTag bridgeTag_in;
-                ChannelCfg chancfg;
-                {bridgeTag_in, chancfg} = unpack(truncate(axiPkt.tData));
-                cfgbridge.chanTxSrv.request.put(chancfg);
-            end
-            0:begin
-                BridgeTag bridgeTag_in;
-                MacEvent macEvent;
-                {bridgeTag_in, macEvent} = unpack(truncate(axiPkt.tData));
-                macbridge.pcieTxSrv.request.put(macEvent);
-                // $display("macbridge tx ok");
-            end
-        endcase
+        if(axi2BridgeFifo_mac.notFull) axi2BridgeFifo_mac.enq(axiPkt);
+        if(axi2BridgeFifo_cfg.notFull) axi2BridgeFifo_cfg.enq(axiPkt);
     endrule
+
+    rule forward_axi_to_macbridge; 
+        let axiPkt = axi2BridgeFifo_mac.first;
+        axi2BridgeFifo_mac.deq;
+        MacBridge_TOP macbridge_top = unpack(truncate(axiPkt.tData));
+        if(macbridge_top.bridgeTag.control == 0)begin
+            if(macbridge_top.macEvent.srcMacId != macbridge_top.macEvent.dstMacId)begin
+                macbridge.pcieTxSrv.request.put(macbridge_top.macEvent);
+                $display("macbridge tx ok, srcPhyId:%d, dstPhyId:%d",macbridge_top.macEvent.srcMacId, macbridge_top.macEvent.dstMacId);
+            end
+        end
+    endrule
+    
+    rule forward_axi_to_cfgbridge; 
+        let axiPkt = axi2BridgeFifo_cfg.first;
+        axi2BridgeFifo_cfg.deq;
+        CfgBridge_TOP cfgbridge_top = unpack(truncate(axiPkt.tData));
+        if(cfgbridge_top.bridgeTag.control == 1)begin
+            if(cfgbridge_top.channelCfg.srcPhyId != cfgbridge_top.channelCfg.dstPhyId)begin
+                cfgbridge.chanTxSrv.request.put(cfgbridge_top.channelCfg);
+                $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",cfgbridge_top.channelCfg.srcPhyId, cfgbridge_top.channelCfg.dstPhyId);
+            end
+        end
+    endrule
+    // rule forward_axi_to_Bridge;
+    //     let axiPkt = axi2BridgeFifo.first;
+    //     axi2BridgeFifo.deq;
+    //     CommonBridge_TOP commonBridge_TOP= unpack(truncate(axiPkt.tData));
+    //     $display("commonBridge_TOP.bridgeTag.control:%d",commonBridge_TOP.bridgeTag.control == 1);
+    //     if (commonBridge_TOP.bridgeTag.control == 1)begin
+    //     // if ( True )begin
+    //             // BridgeTag bridgeTag_in1;
+    //             // ChannelCfg chancfg;
+    //             // {bridgeTag_in1, chancfg} = unpack(truncate(commonBridge_TOP.undefinedPart));
+    //             ChannelCfg chancfg = unpack(truncate(commonBridge_TOP.undefinedPart));
+    //             // axi2BridgeFifo.deq;
+    //             if(chancfg.srcPhyId != chancfg.dstPhyId)begin
+    //                 cfgbridge.chanTxSrv.request.put(chancfg);
+    //             end
+    //             $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",chancfg.srcPhyId, chancfg.dstPhyId);
+
+    //         end
+    //         else begin
+    //             MacEvent macEvent= unpack(truncate(commonBridge_TOP.undefinedPart));
+    //             // {bridgeTag_in2, macEvent} = unpack(truncate(commonBridge_TOP.undefinedPart));
+    //             // axi2BridgeFifo.deq;
+    //             if(macEvent.srcMacId != macEvent.dstMacId)begin
+    //                 macbridge.pcieTxSrv.request.put(macEvent);
+    //             end
+    //             $display("macbridge tx ok, srcPhyId:%d, dstPhyId:%d",macEvent.srcMacId, macEvent.dstMacId);
+    //         end
+    //     // case (bridgeTag.control)
+    //     //     1:begin
+    //     //         BridgeTag bridgeTag_in1;
+    //     //         ChannelCfg chancfg;
+    //     //         {bridgeTag_in1, chancfg} = unpack(truncate(axiPkt.tData));
+    //     //         // axi2BridgeFifo.deq;
+    //     //         cfgbridge.chanTxSrv.request.put(chancfg);
+    //     //         $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",chancfg.srcPhyId, chancfg.dstPhyId);
+
+    //     //     end
+    //     //     0:begin
+    //     //         BridgeTag bridgeTag_in2;
+    //     //         MacEvent macEvent;
+    //     //         {bridgeTag_in2, macEvent} = unpack(truncate(axiPkt.tData));
+    //     //         // axi2BridgeFifo.deq;
+    //     //         macbridge.pcieTxSrv.request.put(macEvent);
+    //     //         $display("macbridge tx ok, srcPhyId:%d, dstPhyId:%d",macEvent.srcMacId, macEvent.dstMacId);
+    //     //         // $display("macbridge tx ok");
+    //     //     end
+    //     // endcase
+    //     // // BridgeTag bridgeTag_in2;
+    //     // // MacEvent macEvent;
+    //     // MacBridge_TOP macBridge_TOP = unpack(truncate(axiPkt.tData));
+    //     // // axi2BridgeFifo.deq;
+    //     // macbridge.pcieTxSrv.request.put(macBridge_TOP.macEvent);
+    // endrule
 
     // // 初始化BRAM规则
     // rule initializeBRAM (!initialized);

@@ -317,9 +317,11 @@ typedef Client#(ChannelCfg, GenericResp) ChanClt;
 
 typedef 1 CONTROL_FLAG_WIDTH;
 typedef 7 NOTUSED_FLAG_WIDTH;
+typedef 504 UndefinedPart_WIDTH;
 
 typedef Bit#(CONTROL_FLAG_WIDTH) CONTROL_FLAG;
 typedef Bit#(CONTROL_FLAG_WIDTH) NOTUSED_FLAG;
+typedef Bit#(UndefinedPart_WIDTH) UNDEFINED_PART;
 
 typedef struct {
     CONTROL_FLAG control;
@@ -331,3 +333,18 @@ function BridgeTag getEmptyBridgeTag();
         control: 0,
         notUsed: 0};
 endfunction
+
+typedef struct {
+    BridgeTag bridgeTag;
+    MacEvent macEvent;
+} MacBridge_TOP deriving(Eq, Bits, Bounded, FShow);
+
+typedef struct {
+    BridgeTag bridgeTag;
+    ChannelCfg channelCfg;
+} CfgBridge_TOP deriving(Eq, Bits, Bounded, FShow);
+
+typedef struct {
+    BridgeTag bridgeTag;
+    UNDEFINED_PART undefinedPart;
+} CommonBridge_TOP deriving(Eq, Bits, Bounded, FShow);

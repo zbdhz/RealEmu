@@ -153,8 +153,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 mpduDigest: lowMactxReq.mpduDigest
             }; 
             phyTxReqQ.enq(phyTxpkt);
-            //phyTxRespQ.enq(GenericResp{});
-
+            // $display("phyTxReqQ.enq(phyTxpkt),mypyhid:%d,srcPhyid:%d,dstPhyId:%d",id,phyTxpkt.srcPhyId,phyTxpkt.dstPhyId);
             txValidReg  <= True;
             txMcsReg    <= phyTxpkt.rfParam.mcs;
             txPowerReg  <= phyTxpkt.rfParam.power;
@@ -190,6 +189,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 status    : True
             }; 
             lowMacRxReqQ.enq(macRxpkt1);
+            $display("lowMacRxReqQ.enq: %x,myphyid :%d,srcid:%d, dstid:%d ", macRxpkt1,id,macRxpkt1.srcMacId,macRxpkt1.dstMacId);
             //lowMacRxRespQ.enq(GenericResp{});
             /*  同步后的结果不传入MAC，否则会导致lowMacRxReqQ被enq两次，产生错误的结果
         end else if(syncEndReg)begin

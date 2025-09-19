@@ -396,6 +396,7 @@ module mkMacDCF#(Integer id)(MacCore);
             ackTimeoutCountReg <= 0;
             // Phy->lowMac接收队列非空, 进入接收处理逻辑
             if (lowMacRxReqQ.notEmpty) begin
+                // $display("lowMacRxReqQ.notEmpty");
                 let rxReq = lowMacRxReqQ.first;
                 if (isMyFrame(id, rxReq.dstMacId) && isDataFrame(rxReq.mpduDigest)) begin
                     // 收到Data帧，需要回复ACK，先退避SIFS
@@ -404,6 +405,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     backOffFsm.start(tuple2(True, False)); //SIFS 
                     rxReq.status = True;
                     highMacRxReqQ.enq(rxReq);
+                    // $display("recv pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive DATA", id));
                 end
                 else if (isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
@@ -421,6 +423,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 else begin
                     // 直接丢弃
                     lowMacRxReqQ.deq;
+                    $display("throw pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
                     lowMacRxRespQ.enq(GenericResp{});
                     // else do nothing.
                 end

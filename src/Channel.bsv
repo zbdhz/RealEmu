@@ -171,7 +171,7 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
         txPipeQ.deq;
         let txPower = phyTxReq.rfParam.power;
         let rxPower = txPower - unpack(pack(loss));  // power is signed, loss is unsigned
-        // $display("pathloss:%d",unpack(pack(loss)));
+        // $display("phyTxReq.srcid:%d, phyTxReq.dstId:%d, pathloss:%d",phyTxReq.srcPhyId,phyTxReq.dstPhyId,unpack(pack(loss)));
         phyTxReq.rfParam.power = rxPower;
         phyRxReqQ.enq(phyTxReq);
     endrule

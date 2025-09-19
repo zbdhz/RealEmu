@@ -55,7 +55,8 @@ def generate_bram_log(file_path):
     
 
 if __name__ == '__main__':
-    # generate_bram_duplicate("bram_one.txt", 0)
+    generate_bram_duplicate("bram_one.txt", 8)
     # generate_bram_sequence_hex("bram_sequence_1024.txt", 0, 1023)
     # generate_bram_log("bram_gainloss_512.txt")
-    generate_bram_distance_files()
+    # generate_bram_distance_files()
+    

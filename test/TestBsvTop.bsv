@@ -88,7 +88,7 @@ module mkTestRawEmuCore(Empty);
 
     // ==================== 节点初始化 ====================
     // 初始化BRAM规则
-    rule initializeBRAM (!initialized && cycleCount % (100000) == 0);
+    rule initializeBRAM (!initialized && cycleCount % (1000) == 500);
         if (initIdx < fromInteger(valueOf(NODE_NUM))) begin
             // 为每个节点设置距离值，这里使用简单的计算方式
             let distance = (initIdx < 256) ? 
@@ -97,7 +97,7 @@ module mkTestRawEmuCore(Empty);
 
             let chancfg = getEmptyChannelCfg;
             chancfg.srcPhyId = truncate(pack(initIdx));
-            chancfg.dstPhyId = 0;
+            chancfg.dstPhyId = 9;
             chancfg.distance = truncate(pack(distance));
             let bridgeTag = getEmptyBridgeTag();
             bridgeTag.control = 1;
@@ -114,17 +114,19 @@ module mkTestRawEmuCore(Empty);
         end else begin
             initialized <= True;
             $display("BRAM initialization completed");
+            // $display("end");
+            // $finish();
         end
     endrule
     // ==================== 发包规则 ====================
     rule send if(initialized && logFile != InvalidFile && cycleCount % (100*1000) == 0);
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = sendingNodes;
-        txReq.dstMacId = 0;
+        txReq.dstMacId = 9;
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
         //txReq.mpduDigest.length = 2048;
         // txReq.rfParam.power = 60*32;//1920
-        txReq.rfParam.power = 40*32;//1280
+        txReq.rfParam.power = 60*32;//1280
         txReq.mpduDigest.length = 1; //使长度变化，用于每次打印出不同的rxReq
         txReq.rfParam.mcs = 0;
         // macNodes[i].highMacTxSrv.request.put(txReq);
