@@ -12,6 +12,9 @@ PARTNAME = xcvu13p-fhgb2104-2-i
 TARGETFILE ?= ../src/BsvTop.bsv
 TOPMODULE ?= mkRawEmuCore
 
+# TARGETFILE ?= ../src/BsvTop_fake.bsv
+# TOPMODULE ?= mkRawEmuCore
+
 # TARGETFILE ?= ../src/PhyCore.bsv
 # TOPMODULE ?= mkPhyYansWifi
 

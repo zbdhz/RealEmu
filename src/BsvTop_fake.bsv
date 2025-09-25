@@ -19,8 +19,8 @@
 import GetPut::*;
 import Connectable::*;
 import ClientServer::*;
-import BRAM::*;
-import ROM::*;
+// import BRAM::*;
+// import ROM::*;
 import Vector::*;
 import FIFOF::*;
 import StmtFSM::*;
@@ -29,14 +29,14 @@ import FIFO::*;
 import BusConversion::*;
 import AxiStreamTypes::*;
 import Types::*;
-import MacCore::*;
-import PhyCore::*;
+// import MacCore::*;
+// import PhyCore::*;
 import CsmaUtils::*;
 import PrimUtils::*;
-import Channel::*;
-import Arbitration::*;
+// import Channel::*;
+// import Arbitration::*;
 import MacBridge::*;
-import CfgBridge::*;
+// import CfgBridge::*;
 
 // typedef 32 NODE_NUM;
 typedef 512 DATA_WIDTH;
@@ -79,35 +79,13 @@ module mkEmuCore(EmuCore);
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_mac <- mkFIFOF; // 接收数据缓冲
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_cfg <- mkFIFOF; // 接收数据缓冲
 
-    Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
-    Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
-    Vector#(NODE_NUM, GainLossModel_Ctrl) channels <- replicateM(mkGainLossModelLogDistance);
-
     MacBridgeIFC macbridge <- mkMacBridge;
-    CfgBridgeIFC cfgbridge <- mkCfgBridge;
-    ArbiterIFC pollController <- mkArbiter;
 
     // ====================   节点连接   ====================
     for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
-        mkConnection(macNodes[i].lowMacTxClt, phyNodes[i].lowMacTxSrv);
-        mkConnection(macNodes[i].lowMacRxSrv, phyNodes[i].lowMacRxClt);
-        mkConnection(phyNodes[i].phyTxClt, channels[i].channel.phyTxSrv);
-        mkConnection(phyNodes[i].phyRxSrv, channels[i].channel.phyRxClt);
-        mkConnection(pollController.phyTxMetaClt[i], channels[i].channel.phyRxMetaSrv);
-        mkConnection(pollController.phyRxMetaSrv[i], channels[i].channel.phyTxMetaClt);
-
-        mkConnection(macbridge.macTxClt[i], macNodes[i].highMacTxSrv);
-        mkConnection(macbridge.macRxSrv[i], macNodes[i].highMacRxClt);
-        
-        mkConnection(cfgbridge.chanTxClt[i], channels[i].chanTxSrv);
+        mkConnection(macbridge.macTxClt[i], macbridge.macRxSrv[i]);
     end
 
-    rule updatePhyStatus;
-        for (Integer i = 0; i < valueof(NODE_NUM); i = i + 1) begin
-            let phyStatus = phyNodes[i].getPhyStatus;
-            macNodes[i].phyStatus.put(phyStatus);
-        end
-    endrule
 
     // 将 MacBridge 数据转发到 AXI 发送接口
     rule forward_macbridge_to_axi;
@@ -127,7 +105,7 @@ module mkEmuCore(EmuCore);
         let axiPkt = axi2BridgeFifo.first;
         axi2BridgeFifo.deq;
         if(axi2BridgeFifo_mac.notFull) axi2BridgeFifo_mac.enq(axiPkt);
-        if(axi2BridgeFifo_cfg.notFull) axi2BridgeFifo_cfg.enq(axiPkt);
+        // if(axi2BridgeFifo_cfg.notFull) axi2BridgeFifo_cfg.enq(axiPkt);
     endrule
 
     rule forward_axi_to_macbridge; 
@@ -142,25 +120,25 @@ module mkEmuCore(EmuCore);
         end
     endrule
 
-    rule forward_axi_to_cfgbridge; 
-        let axiPkt = axi2BridgeFifo_cfg.first;
-        axi2BridgeFifo_cfg.deq;
-        CfgBridge_TOP cfgbridge_top = unpack(truncate(axiPkt.tData));
-        if(cfgbridge_top.bridgeTag.control == 1)begin
-            if(cfgbridge_top.channelCfg.srcPhyId != cfgbridge_top.channelCfg.dstPhyId)begin
-                cfgbridge.chanTxSrv.request.put(cfgbridge_top.channelCfg);
-                // $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",cfgbridge_top.channelCfg.srcPhyId, cfgbridge_top.channelCfg.dstPhyId);
-            end
-        end
-    endrule
+    // rule forward_axi_to_cfgbridge; 
+    //     let axiPkt = axi2BridgeFifo_cfg.first;
+    //     axi2BridgeFifo_cfg.deq;
+    //     CfgBridge_TOP cfgbridge_top = unpack(truncate(axiPkt.tData));
+    //     if(cfgbridge_top.bridgeTag.control == 1)begin
+    //         if(cfgbridge_top.channelCfg.srcPhyId != cfgbridge_top.channelCfg.dstPhyId)begin
+    //             cfgbridge.chanTxSrv.request.put(cfgbridge_top.channelCfg);
+    //             // $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",cfgbridge_top.channelCfg.srcPhyId, cfgbridge_top.channelCfg.dstPhyId);
+    //         end
+    //     end
+    // endrule
         
     rule handshake_macbridge;
         let resp_macbridge <- macbridge.pcieTxSrv.response.get;
     endrule
 
-    rule handshake_cfgbridge;
-        let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
-    endrule
+    // rule handshake_cfgbridge;
+    //     let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
+    // endrule
 
     interface rx = toGet(bridge2AxiFifo);  // 绑定发送接口
     interface tx = toPut(axi2BridgeFifo);  // 绑定接收接口

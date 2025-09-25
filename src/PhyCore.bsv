@@ -51,7 +51,7 @@ endinterface
 ///============================= phyState =====================================
 /// Int#(12) powerdB Q6.5       UInt#(32) powerLinear U24.8
 ///============================================================================
-//(* synthesize *)
+// (* synthesize *)
 module mkPhyYansWifi#(Integer id)(PhyCore);
     FIFOF#(MacEvent)    lowMacTxReqQ      <- mkFIFOF;
     FIFOF#(GenericResp) lowMacTxRespQ     <- mkFIFOF;
@@ -189,7 +189,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 status    : True
             }; 
             lowMacRxReqQ.enq(macRxpkt1);
-            $display("lowMacRxReqQ.enq: %x,myphyid :%d,srcid:%d, dstid:%d ", macRxpkt1,id,macRxpkt1.srcMacId,macRxpkt1.dstMacId);
+            // $display("lowMacRxReqQ.enq: %x,myphyid :%d,srcid:%d, dstid:%d ", macRxpkt1,id,macRxpkt1.srcMacId,macRxpkt1.dstMacId);
             //lowMacRxRespQ.enq(GenericResp{});
             /*  同步后的结果不传入MAC，否则会导致lowMacRxReqQ被enq两次，产生错误的结果
         end else if(syncEndReg)begin
@@ -260,7 +260,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             UInt#(20) aligned_dividend = zeroExtend(rxLenReg) << 3; 
             divider.request.put(tuple2(aligned_dividend, ndbpsWire));
             //immLog("mkPhyYansWifi", "feed_operation", $format("Id %5d, Phy Rx Event", id));
-            //$display("PHY_RX EVENT");
+            // $display("PHY_RX EVENT");
         end
     endrule
 
@@ -287,8 +287,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                     currentMcsReg   <= txMcsReg;
                     currentPowerReg <= txPowerReg;
                     currentLenReg   <= txLenReg;
-                    //$display("PHY_TX start");
-                    //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
+                    // $display("PHY_TX start");
+                    // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
                 end
                 else if (rxValidReg && (rxPowerReg > threash)) begin
                     // 进入同步状态
@@ -302,9 +302,9 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                     currentLenReg   <= rxLenReg;
                     currentMpduDigest <= rxMpduDigest;
                     // if(id==0 || id == 1)
-                    //     $display("%0d PHY_SYNC start, power:%d",id,rxPowerReg);
-                    //$display("PHY_SYNC start, power:%d",rxPowerReg);
-                    //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync Start,power: %0d", id, rxPowerReg));
+                    // $display("%0d PHY_SYNC start, power:%d",id,rxPowerReg);
+                    // $display("PHY_SYNC start, power:%d",rxPowerReg);
+                    // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync Start,power: %0d", id, rxPowerReg));
                 end
             end
     
@@ -329,15 +329,15 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                         stateReg    <= PHY_RX;
                         syncCrcReg  <= True;
                         // if(id==0 || id == 1)
-                        //     $display("%0d PHY_SYNC OK, start PHY_RX", id);
-                        //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync OK, start Phy Rx", id));
+                            // $display("%0d PHY_SYNC OK, start PHY_RX", id);
+                        // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync OK, start Phy Rx", id));
                     end 
                     else begin
                         //stateReg    <= PHY_IDLE;
                         stateReg <= PHY_RX;
                         syncCrcReg  <= False;
-                        //$display("PHY_SYNC ERROR, PHY_IDLE");
-                        //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync Error", id));
+                        // $display("PHY_SYNC ERROR, PHY_IDLE");
+                        // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync Error", id));
                     end
                 end
             end

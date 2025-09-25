@@ -101,7 +101,7 @@ module mkGainLossModelIdeal(GainLossModel);
     interface phyRxMetaSrv = toGPServer(rxReqQ, rxRespQ);
 endmodule
 
-
+(* synthesize *)
 module mkGainLossModelLogDistance(GainLossModel_Ctrl);
     FIFO#(PhyEvent)    phyTxReqQ   <- mkFIFO;
     FIFO#(GenericResp) phyTxRespQ  <- mkFIFO;
@@ -188,7 +188,7 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
                 datain: truncate(pack(chancfg.distance))
             };
         distanceRam2.portA.request.put(bramReq);
-        $display("channel config: srcPhyId=%d, dstPhyId=%d, distance=%d", chancfg.srcPhyId, chancfg.dstPhyId, chancfg.distance);
+        // $display("channel config: srcPhyId=%d, dstPhyId=%d, distance=%d", chancfg.srcPhyId, chancfg.dstPhyId, chancfg.distance);
     endrule
 
     rule handshakeRx;

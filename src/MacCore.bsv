@@ -138,7 +138,7 @@ module mkNav#(
         Duration timeoutThresholdReg = zeroExtend(2 * macCfg.sifs + 2 * macCfg.slot + macCfg.sigTime + macCfg.ofdmSymbolTime * macCfg.maxNum + macCfg.phyDelayTime); //参考openwifi
         // 处理Duration字段
         if (frame.mpduDigest.duration[15] == 0) begin
-            $display("duration = %0d",frame.mpduDigest.duration[14:0]);
+            // $display("duration = %0d",frame.mpduDigest.duration[14:0]);
             if(zeroExtend(frame.mpduDigest.duration[14:0]) > timeoutThresholdReg) begin
                 newNavReg <= timeoutThresholdReg;
             end
@@ -351,7 +351,9 @@ module mkCsmaCaBackOff#(
 endmodule
 
 // 802.11 DCF Low Mac Layer
+
 (* always_enabled = "phyStatus.put" *)
+// (* synthesize *)
 module mkMacDCF#(Integer id)(MacCore);
     FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
     FIFOF#(GenericResp) highMacTxRespQ <- mkFIFOF;
@@ -423,7 +425,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 else begin
                     // 直接丢弃
                     lowMacRxReqQ.deq;
-                    $display("throw pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
+                    // $display("throw pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
                     lowMacRxRespQ.enq(GenericResp{});
                     // else do nothing.
                 end
