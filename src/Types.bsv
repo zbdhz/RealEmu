@@ -20,8 +20,8 @@ import ClientServer::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 16 NODE_NUM;
-typedef 4  GROUP_SIZE; 
+typedef 4 NODE_NUM;
+typedef 2  GROUP_SIZE; 
 //----------------------------------------------------
 
 typedef 1024 MAX_DEV_NUM;
@@ -320,7 +320,7 @@ typedef 7 NOTUSED_FLAG_WIDTH;
 typedef 504 UndefinedPart_WIDTH;
 
 typedef Bit#(CONTROL_FLAG_WIDTH) CONTROL_FLAG;
-typedef Bit#(CONTROL_FLAG_WIDTH) NOTUSED_FLAG;
+typedef Bit#(NOTUSED_FLAG_WIDTH) NOTUSED_FLAG;
 typedef Bit#(UndefinedPart_WIDTH) UNDEFINED_PART;
 
 typedef struct {
