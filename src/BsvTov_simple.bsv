@@ -79,8 +79,8 @@ module mkEmuCore(EmuCore);
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_mac <- mkFIFOF; // 接收数据缓冲
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_cfg <- mkFIFOF; // 接收数据缓冲
 
-    Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacPipe, fromInteger));
-    Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyPipe, fromInteger));
+    Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
+    Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
     Vector#(NODE_NUM, GainLossModel_Ctrl) channels <- replicateM(mkGainLossModelLogDistance);
 
     MacBridgeIFC macbridge <- mkMacBridge;

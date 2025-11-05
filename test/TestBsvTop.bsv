@@ -20,8 +20,9 @@ import Arbitration::*;
 import MacBridge::*;
 import CfgBridge::*;
 import BsvTop::*;
+// import BsvTov_simple::*;
 
-typedef 8 TEST_NODE_NUM;
+typedef 16 TEST_NODE_NUM;
 function String digitToChar(Integer d);
     case (d)
         0: return "0";
@@ -97,12 +98,12 @@ module mkTestRawEmuCore(Empty);
 
             let chancfg = getEmptyChannelCfg;
             chancfg.srcPhyId = truncate(pack(initIdx));
-            chancfg.dstPhyId = 9;
+            chancfg.dstPhyId = 0;
             chancfg.distance = truncate(pack(distance));
             let bridgeTag = getEmptyBridgeTag();
             bridgeTag.control = 1;
             AxiStream#(KEEP_WIDTH, TUSER_WIDTH) axiPkt = AxiStream{
-                tData: zeroExtend(pack(tuple2(bridgeTag, chancfg))),
+                tData: zeroExtend(pack(tuple2(chancfg,bridgeTag))),
                 tKeep: '1,      // 所有字节有效
                 tLast: True,     // 假设每个MAC事件对应一个AXI包
                 tUser: 0
@@ -122,18 +123,18 @@ module mkTestRawEmuCore(Empty);
     rule send if(initialized && logFile != InvalidFile && cycleCount % (100*1000) == 0);
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = sendingNodes;
-        txReq.dstMacId = 9;
+        txReq.dstMacId = 0;
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
         //txReq.mpduDigest.length = 2048;
-        // txReq.rfParam.power = 60*32;//1920
-        txReq.rfParam.power = 60*32;//1280
-        txReq.mpduDigest.length = 1; //使长度变化，用于每次打印出不同的rxReq
+        txReq.rfParam.power = 60*32;//1920
+        // txReq.rfParam.power = 1280;//1280
+        txReq.mpduDigest.length = 10; //使长度变化，用于每次打印出不同的rxReq
         txReq.rfParam.mcs = 0;
         // macNodes[i].highMacTxSrv.request.put(txReq);
         // macbridge.pcieTxSrv.request.put(txReq);
         let bridgeTag = getEmptyBridgeTag();
         AxiStream#(KEEP_WIDTH, TUSER_WIDTH) axiPkt = AxiStream{
-            tData: zeroExtend(pack(tuple2(bridgeTag, txReq))),
+            tData: zeroExtend(pack(tuple2(txReq,bridgeTag))),
             tKeep: '1,      // 所有字节有效
             tLast: True,     // 假设每个MAC事件对应一个AXI包
             tUser: 0

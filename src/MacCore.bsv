@@ -195,7 +195,7 @@ module mkCsmaCaBackOff#(
     Reg#(Bool)       isExpBackOffReg        <- mkReg(False);  // Option2: IFS退避后是否需要随机退避
 
     let              expBackOffGen          <- mkExpBackoffGenerator;
-    let              navController          <- mkNav(usGen, id);
+    let              navController          <- mkNav(usGen, id);  //检查逻辑发现可能是一个冗余项，暂时保留
     
     Reg#(TimeUs) suspendTimer <- mkReg(0);
     rule csmaFSM;
@@ -407,7 +407,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     backOffFsm.start(tuple2(True, False)); //SIFS 
                     rxReq.status = True;
                     highMacRxReqQ.enq(rxReq);
-                    // $display("recv pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
+                    $display("recv pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive DATA", id));
                 end
                 else if (isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
@@ -461,10 +461,10 @@ module mkMacDCF#(Integer id)(MacCore);
             dcfStateReg  <= state;
         endrule
 
-        Reg#(UInt#(64)) cycleCount <- mkReg(0);
-        rule updateclock;
-            cycleCount <= cycleCount + 1;
-        endrule
+        // Reg#(UInt#(64)) cycleCount <- mkReg(0);
+        // rule updateclock;
+        //     cycleCount <= cycleCount + 1;
+        // endrule
 
         // 等待退避机制结束
         rule dcfWaitBackOff if (dcfStateReg == DCF_WAIT_BACKOFF);

@@ -20,8 +20,8 @@ import ClientServer::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 4 NODE_NUM;
-typedef 2  GROUP_SIZE; 
+typedef 16 NODE_NUM;
+typedef 4  GROUP_SIZE; 
 //----------------------------------------------------
 
 typedef 1024 MAX_DEV_NUM;
@@ -335,13 +335,13 @@ function BridgeTag getEmptyBridgeTag();
 endfunction
 
 typedef struct {
-    BridgeTag bridgeTag;
     MacEvent macEvent;
+    BridgeTag bridgeTag;//调换控制帧的位置，确保数据面的对齐
 } MacBridge_TOP deriving(Eq, Bits, Bounded, FShow);
 
 typedef struct {
-    BridgeTag bridgeTag;
     ChannelCfg channelCfg;
+    BridgeTag bridgeTag;//调换控制帧的位置，确保数据面的对齐
 } CfgBridge_TOP deriving(Eq, Bits, Bounded, FShow);
 
 typedef struct {

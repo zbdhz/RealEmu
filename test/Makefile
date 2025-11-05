@@ -9,7 +9,7 @@ include ../Makefile.base
 # TESTFILE ?= TestBsvTop.bsv 
 # TOPMODULE ?= mkTestRawEmuCore
 
-TESTFILE ?= TestBsvTop_fake.bsv 
+TESTFILE ?= TestBsvTop.bsv 
 TOPMODULE ?= mkTestRawEmuCore
 
 # TESTFILE ?= TestPhySinrStats.bsv
