@@ -53,6 +53,9 @@ export RUNTO = $(RUNTOPHASE)
 export PART = $(PARTNAME)
 export MAX_NET_PATH_NUM
 
+SCRIPT_DIR = ../scripts
+MEM_DIR = ../mem
+
 export DIR_BSV_GENERATED_STUB = $(BACKENDDIR)/verilog/stub
 
 compile:
@@ -63,6 +66,8 @@ verilog: compile
 	mkdir -p $(VLOGDIR)
 	bsc $(VERILOGFLAGS) $(DIRFLAGS) $(MISCFLAGS) $(RECOMPILEFLAGS) $(RUNTIMEFLAGS) $(TRANSFLAGS) -g $(TOPMODULE) $(TARGETFILE)
 	bluetcl listVlogFiles.tcl -bdir $(BUILDDIR) -vdir $(BUILDDIR) $(TOPMODULE) $(TOPMODULE) | grep -i '\.v' | xargs -I {} cp {} $(VLOGDIR)
+	python3 $(SCRIPT_DIR)/genRam.py && mv bram_*.txt $(VLOGDIR) 
+	cp $(MEM_DIR)/*.mem $(VLOGDIR)
 
 vivado: verilog
 	vivado -mode tcl -nolog -nojournal -source ./build_top.tcl 2>&1 | tee $(LOGFILE)

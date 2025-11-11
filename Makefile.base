@@ -24,3 +24,4 @@ BSVSRCDIR = -p +:$(abspath ../src):$(LIBSRCDIR)
 DIRFLAGS = $(BSVSRCDIR) $(OUTDIR) $(WORKDIR)
 MISCFLAGS = -print-flags -show-timestamps -show-version -steps 6000000 # -D macro
 RUNTIMEFLAGS = +RTS -K4095M -RTS
+
