@@ -5,6 +5,10 @@ import ClientServer::*;
 import Types::*;
 import PhyCore::*;
 // 最简单的一次发包情况
+
+typedef 2000 Send_delta_time_us;
+typedef 20 Send_Num;
+
 module mkTestPhy(Empty);
 
     Reg#(Bool) isInitReg <- mkReg(False);
@@ -17,7 +21,6 @@ module mkTestPhy(Empty);
 
     Reg#(UInt#(64)) cycleCount <- mkReg(0);
     Reg#(UInt#(12)) cntCount <- mkReg(0);
-    Reg#(Bool)  tx <- mkReg(False); 
 
     rule updateclock;
             cycleCount <= cycleCount + 1;
@@ -32,28 +35,26 @@ module mkTestPhy(Empty);
     //     let resp <- dut0.phyRxSrv.response.get;
     // endrule
 
-    rule send if (tx==False);
+    rule send if (cycleCount % (fromInteger(valueOf(Send_delta_time_us))*200) == 0);
         let cnt = cntCount;
         cntCount <= cntCount + 1;
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 0;
         txReq.dstMacId = 1;
-        txReq.rfParam.power = 30*32;
-        txReq.rfParam.mcs = 7;
+        txReq.rfParam.power = 20*32;
+        txReq.rfParam.mcs = 0;
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
-        txReq.mpduDigest.length = 1;
+        txReq.mpduDigest.length = 1000;
         dut0.lowMacTxSrv.request.put(txReq);
-        tx <= True;
         $display("packet send%d",cnt);
     endrule
 
-    rule receive(tx);
+    rule receive;
         let rxReq <- dut1.lowMacRxClt.request.get;
-        tx <= False;
         $display("packet receive");
     endrule
 
-    rule simEnd(cntCount == 1000);//1ms
+    rule simEnd(cntCount == fromInteger(valueOf(Send_Num)));
         $display("Test Pass");
         $finish();
     endrule

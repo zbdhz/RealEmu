@@ -9,14 +9,20 @@ include ../Makefile.base
 # TESTFILE ?= TestBsvTop.bsv 
 # TOPMODULE ?= mkTestRawEmuCore
 
-TESTFILE ?= TestBsvTop.bsv 
-TOPMODULE ?= mkTestRawEmuCore
+# TESTFILE ?= TestBsvTop.bsv 
+# TOPMODULE ?= mkTestRawEmuCore
+
+TESTFILE ?= TestBsvTop_collision.bsv 
+TOPMODULE ?= mkTestRawEmuCore_collision
 
 # TESTFILE ?= TestPhySinrStats.bsv
 # TOPMODULE ?= mkTestPhySinrStats
 
 # TESTFILE ?= TestMacBridge.bsv
 # TOPMODULE ?= mkTestMacBridge
+
+# TESTFILE ?= TestPhy.bsv
+# TOPMODULE ?= mkTestPhy
 
 SCRIPT_DIR = ../scripts
 MEM_DIR = ../mem

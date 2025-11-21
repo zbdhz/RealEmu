@@ -173,6 +173,7 @@ interface CsmaBackOff_IFC;
     method CsmaState getStatus();           // 获取退避状态机当前状态
     method Bool      done();                // 退避完成
     interface Put#(MacConfig) configure;    // 配置退避状态机参数
+    interface Nav_IFC navctrl;
 endinterface
 
 module mkCsmaCaBackOff#(
@@ -348,6 +349,10 @@ module mkCsmaCaBackOff#(
             expBackOffGen.configure.put(macCfg);
         endmethod
     endinterface
+
+    //引出nav模块配置
+    interface navctrl = navController;
+
 endmodule
 
 // 802.11 DCF Low Mac Layer
@@ -368,6 +373,8 @@ module mkMacDCF#(Integer id)(MacCore);
     Reg#(MacConfig)  macCfgReg      <- mkReg(getDefaultMacCfg);
     Reg#(MacStatus)  macStaReg      <- mkReg(MacStatus{backOffState:CSMA_IDLE, dcfState:DCF_IDLE});
 
+    Reg#(MacEvent)   lasthighMacTxReq             <- mkReg(getDefaultMacEvent);
+
     Wire#(PhyStatus)  phyStatusWire       <- mkBypassWire;
     
     Reg#(DcfNextTask)    nextTaskReg        <- mkReg(NT_IDLE);
@@ -382,7 +389,6 @@ module mkMacDCF#(Integer id)(MacCore);
 `endif
     TimeGen              slotGen            <- mkSlotGen(usGen, macCfgReg);
     let                  backOffFsm         <- mkCsmaCaBackOff(phyStatusWire, usGen, slotGen, id);
-    let                  navController      <- mkNav(usGen, id);
 
     rule phyHandShake;
         lowMacTxRespQ.deq;
@@ -418,7 +424,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive RTS", id));
                 end
                 else if (!isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
-                    navController.handleFrame(rxReq);       //新增nav逻辑
+                    backOffFsm.navctrl.handleFrame(rxReq);       //新增nav逻辑
                     lowMacRxReqQ.deq;
                     lowMacRxRespQ.enq(GenericResp{});
                 end
@@ -466,6 +472,14 @@ module mkMacDCF#(Integer id)(MacCore);
         //     cycleCount <= cycleCount + 1;
         // endrule
 
+        // 更新下发参考值
+        rule updateCtlFramPower;
+            if(highMacTxReqQ.notEmpty) begin
+            lasthighMacTxReq <= highMacTxReqQ.first;
+            // immLog("mkMacDcf", "updatepower", $format("Id %5d, update power:%d", id, lasthighMacTxReq.rfParam.power));
+            end
+        endrule
+
         // 等待退避机制结束
         rule dcfWaitBackOff if (dcfStateReg == DCF_WAIT_BACKOFF);
             if (backOffFsm.done) begin
@@ -490,6 +504,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 NT_SEND_CTS: begin
                     // 回复CTS
                     let refFrame = lowMacRxReqQ.first;
+                    refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;    
                     lowMacRxReqQ.deq;
                     lowMacRxRespQ.enq(GenericResp{});
                     let ctsFrame = setCtsFrame(id, refFrame);
@@ -502,6 +517,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     // 回复ACK
                     if(lowMacRxReqQ.notEmpty) begin
                         let refFrame = lowMacRxReqQ.first;
+                        refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
                         lowMacRxReqQ.deq;
                         lowMacRxRespQ.enq(GenericResp{});
                         let ackFrame = setAckFrame(id, refFrame);
@@ -554,7 +570,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 if (retransCountReg < macCfgReg.retryLimit) begin
                     retransCountReg <= retransCountReg + 1;
                     backOffFsm.incrCW;  // 失败后增大退避窗口
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
+                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
                     state = DCF_IDLE;
                     nextTask = NT_IDLE;
                 end 

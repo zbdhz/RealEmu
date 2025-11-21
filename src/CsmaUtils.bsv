@@ -56,7 +56,8 @@ function MacEvent setRtsFrame(MacEvent refFrame);
     rtsFrame.mpduDigest.frameSubType = fromInteger(valueOf(FC_CTRLSUB_RTS));
     rtsFrame.mpduDigest.length = fromInteger(valueOf(RTS_MPDU_LEN));
     rtsFrame.rfParam.mcs = 0;  // RTS use the lowest speed
-    rtsFrame.rfParam.power = 32*30;
+    // rtsFrame.rfParam.power = 32*30;
+    rtsFrame.rfParam.power = refFrame.rfParam.power;
     return rtsFrame;
 endfunction
 
@@ -68,7 +69,8 @@ function MacEvent setCtsFrame(Integer id, MacEvent refFrame);
     ctsFrame.mpduDigest.frameSubType = fromInteger(valueOf(FC_CTRLSUB_CTS));
     ctsFrame.mpduDigest.length = fromInteger(valueOf(CTS_MPDU_LEN));
     ctsFrame.rfParam.mcs = 0;  // CTS use the lowest speed
-    ctsFrame.rfParam.power = 32*30;
+    // ctsFrame.rfParam.power = 32*30;
+    ctsFrame.rfParam.power = refFrame.rfParam.power;
     return ctsFrame;
 endfunction
 
@@ -80,7 +82,8 @@ function MacEvent setAckFrame(Integer id, MacEvent refFrame);
     ackFrame.mpduDigest.frameSubType = fromInteger(valueOf(FC_CTRLSUB_ACK));
     ackFrame.mpduDigest.length = fromInteger(valueOf(ACK_MPDU_LEN));
     ackFrame.rfParam.mcs = 0;  // ACK use the lowest speed
-    ackFrame.rfParam.power = 32*30;
+    // ackFrame.rfParam.power = 32*30;
+    ackFrame.rfParam.power = refFrame.rfParam.power;
     return ackFrame;
 endfunction
 

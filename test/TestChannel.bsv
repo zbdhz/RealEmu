@@ -11,11 +11,11 @@ import Types::*;
 import PrimUtils::*;
 
 // 配置参数
-typedef 15000 Recv_delta_time;
-typedef 1000 Recv_time;
-typedef 12000 Print_time;
-typedef 300 TestNum;
-typedef 1024 ALL_Nodes;
+typedef 1 Recv_delta_time;
+typedef 0 Recv_time;
+typedef 0 Print_time;
+typedef 100 TestNum;
+// typedef 1024 ALL_Nodes;
 
 function PhyEvent getEmptyPhyEvent();
         return PhyEvent {
@@ -66,7 +66,7 @@ module mkTestLogDistanceGainLossModel(Empty);
 
     // 初始化BRAM规则
     rule initializeBRAM (!initialized);
-        if (initIdx < fromInteger(valueOf(ALL_Nodes))) begin
+        if (initIdx < fromInteger(valueOf(TestNum))) begin
             // 为每个节点设置距离值，这里使用简单的计算方式
             // 
             let distance = (initIdx < 256) ? 
@@ -80,7 +80,7 @@ module mkTestLogDistanceGainLossModel(Empty);
             //     datain: truncate(pack(distance))
             // };
             let chancfg = getEmptyChannelCfg;
-            chancfg.dstPhyId = truncate(pack(initIdx));
+            chancfg.srcPhyId = truncate(pack(initIdx));
             chancfg.distance = truncate(pack(distance));
             dut.chanTxSrv.request.put(chancfg);
             // BRAMRequest{              // 构造一个 BRAMRequest 类型的结构体
@@ -90,7 +90,7 @@ module mkTestLogDistanceGainLossModel(Empty);
             //     datain: wdata             // 写入数据，当 iswrite=False 时，无所谓是什么
             // }
             initIdx <= initIdx + 1;
-            $display("Initializing node %0d with distance %0d", initIdx, distance);
+            $display("cyclecount: %0d: Initializing node %0d with distance %0d",cycleCount, initIdx, distance);
         end else begin
             initialized <= True;
             $display("BRAM initialization completed");
@@ -110,7 +110,7 @@ module mkTestLogDistanceGainLossModel(Empty);
     rule recvPkt_process (initialized);
         let rxReq <- dut.channel.phyRxClt.request.get;
         printPhyEvent(rxReq);
-        // $display("Recv pkt process sucess");
+        $display("cyclecount: %0d, Recv pkt process sucess", cycleCount);
         // dut.phyRxClt.response.put(PhyRxResp{});
     endrule
 
