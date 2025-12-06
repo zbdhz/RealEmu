@@ -68,7 +68,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         UInt#(32)  clkFreq      = 200;   //the clock freq (/MHz)
     `endif
 
-    UInt#(32)  syncTime     = 48 * clkFreq;  
+    UInt#(32)  syncTime     = 20 * clkFreq;  
     UInt#(32)  noisePower   = 256; //1mW   
     Int#(12)   lowSNR       = -160;   
     Int#(12)   highSNR      = 960;
@@ -123,7 +123,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
 
     Reg#(UInt#(32))     rxTimerReg          <- mkReg(0);     
     Reg#(UInt#(32))     syncTimerReg        <- mkReg(0);     
-    Reg#(UInt#(32))     txTimerReg          <- mkReg(clkFreq * 48);   
+    Reg#(UInt#(32))     txTimerReg          <- mkReg(clkFreq * 20);   
     Reg#(UInt#(32))     ccaTimerReg         <- mkReg(0);  
 
     //---------------------
@@ -153,7 +153,6 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             }; 
             phyTxReqQ.enq(phyTxpkt);
             //上层往下层发包无阻塞
-            //物理层逻辑有问题，需要修改，发送包后，需要等待上一个包后，再发送下一个
             $display("[%8d ns] phyTxReqQ.enq(phyTxpkt),mypyhid:%d,srcPhyid:%d,dstPhyId:%d",$time, id,phyTxpkt.srcPhyId,phyTxpkt.dstPhyId);
             txValidReg  <= True;
             txMcsReg    <= phyTxpkt.rfParam.mcs;
@@ -177,7 +176,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             rxLenReg    <= unpack(pack(phyRxpkt.ppduLen));
             rxMpduDigest<= phyRxpkt.mpduDigest;
             //暂存数据包，设定标志位，等待逻辑运算通过后传输
-            // $display("[%8d ns] phyRxReqQ.deq;,mypyhid:%d,srcPhyid:%d,dstPhyId:%d",$time, id,phyRxpkt.srcPhyId,phyRxpkt.dstPhyId);
+            $display("[%8d ns] phyRxReqQ.deq;,mypyhid:%d,srcPhyid:%d,dstPhyId:%d",$time, id,phyRxpkt.srcPhyId,phyRxpkt.dstPhyId);
         end
     endrule
 
@@ -236,17 +235,26 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             tempMcsReg <= rxMcsReg;
     endrule
 
+    // UInt#(10) ndbps_lut[8] = {
+    //     26, 
+    //     52, 
+    //     78, 
+    //     104, 
+    //     156, 
+    //     208, 
+    //     234, 
+    //     260
+    // };
     UInt#(10) ndbps_lut[8] = {
-        26, 
-        52, 
-        78, 
-        104, 
-        156, 
-        208, 
-        234, 
-        260
-    };
-
+        24, 
+        36, 
+        48, 
+        72, 
+        96, 
+        144, 
+        192, 
+        216
+    };//80211a
     Wire#(UInt#(10)) ndbpsWire <- mkDWire(26);
 
     rule updateNdbps;
@@ -293,7 +301,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                     currentPowerReg <= txPowerReg;
                     currentLenReg   <= txLenReg;
                     // $display("PHY_TX start");
-                    // $display("[%8d ns] PHY_TX start", $time);
+                    $display("[%8d ns] id: %0d, PHY_TX start", $time, id);
                     // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
                 end
                 else if (rxValidReg && (rxPowerReg > threash)) begin
@@ -324,7 +332,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 if (rxBeginReg && psduTimeValidWire) begin
                     rxTimerReg <= psduTimeWire;
                     rxBeginReg <= False;
-                    $display("[%8d ns] psdu data time: %0d (clk)", $time, psduTimeWire);
+                    // $display("[%8d ns] psdu data time: %0d (clk)", $time, psduTimeWire);
                     //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, psdu data time: %0d (clk)", id, psduTimeWire));
                 end
     
@@ -376,7 +384,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 // $display("[%8d ns] PHY_TX", $time);
                 // 发送计时器处理
                 if (txBeginReg && psduTimeValidWire) begin
-                    txTimerReg <= txTimerReg + psduTimeWire - 1;
+                    txTimerReg <= syncTime + psduTimeWire - 1;
                     txBeginReg <= False;
                     // if(id==0 || id == 1)
                         // $display("%d tx time: %0d (clk)", id, syncTime + psduTimeWire);
@@ -388,7 +396,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 else begin
                     stateReg <= PHY_IDLE;
                     txEndReg <= True;
-                    // $display("[%8d ns] PHY_TX END", $time);
+                    $display("[%8d ns] PHY_TX END", $time);
                     // if(id==0 || id == 1)
                     //     $display("%d PHY_TX END", id);
                     //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx End", id));
@@ -448,10 +456,10 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         end
         rom2.request.put(addr2);
         // if(id==0 || id == 1)
-        //     $display("SINR : %d",addr2);
+            // $display("id: %d, addr2: %d, sinrAddr: %d, currentMcsReg: %d",id, addr2,sinrAddr,currentMcsReg);
 
-        //$display("SINR: %0d ", (currentPowerReg - powerdBWire) >> 5);
-        //immLog("mkPhyYansWifi", "rom2Request", $format("Id %5d, SINR: %0d", id, (currentPowerReg - powerdBWire) >> 5));
+        // $display("SINR: %0d ", (currentPowerReg - powerdBWire) >> 5);
+        // immLog("mkPhyYansWifi", "rom2Request", $format("Id %5d, SINR: %0d", id, (currentPowerReg - powerdBWire) >> 5));
 
     endrule
 
@@ -550,12 +558,24 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
 
     interface phyTxClt    = toGPClient(phyTxReqQ, phyTxRespQ);
     interface phyRxSrv    = toGPServer(phyRxReqQ, phyRxRespQ);
-    
+    // Bool cca;
+    // Bool fcsEn;
+    // Bool fcsCorrect;
+    // Bool txStart;
+    // Bool txEnd;
+    // Bool rxStart;
+    // Bool rxEnd;
+    // PhyFsmState state;
     method PhyStatus getPhyStatus;
         return PhyStatus {
             cca         : ccaBusyReg,
             fcsEn       : rxEndReg,
-            fcsCorrect  : crcReg
+            fcsCorrect  : crcReg,
+            txStart     : txBeginReg,
+            txEnd       : txEndReg,
+            rxStart     : rxBeginReg,
+            rxEnd       : rxEndReg,
+            state       : stateReg
             };
     endmethod
 endmodule

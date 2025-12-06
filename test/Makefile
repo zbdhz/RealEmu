@@ -12,8 +12,11 @@ include ../Makefile.base
 # TESTFILE ?= TestBsvTop.bsv 
 # TOPMODULE ?= mkTestRawEmuCore
 
-TESTFILE ?= TestBsvTop_collision.bsv 
-TOPMODULE ?= mkTestRawEmuCore_collision
+# TESTFILE ?= TestBsvTop_collision.bsv 
+# TOPMODULE ?= mkTestRawEmuCore_collision
+
+TESTFILE ?= TestBsvTop_bianchi.bsv 
+TOPMODULE ?= mkTestRawEmuCore_bianchi
 
 # TESTFILE ?= TestPhySinrStats.bsv
 # TOPMODULE ?= mkTestPhySinrStats
@@ -45,8 +48,10 @@ link: compile
 simulate: link
 	cd $(BUILDDIR) && $(SIMSCRIPT_NAME)
 
+singlerun:
+	cd $(BUILDDIR) && $(SIMSCRIPT_NAME)
 clean:
-	rm -rf $(BUILDDIR) *.txt
+	rm -rf $(BUILDDIR) *.txt *.log
 
 .PHONY: compile simulate clean
 .DEFAULT_GOAL := simulate

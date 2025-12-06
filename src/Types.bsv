@@ -20,8 +20,8 @@ import ClientServer::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 4 NODE_NUM;
-typedef 2  GROUP_SIZE; 
+typedef 64 NODE_NUM;
+typedef 8  GROUP_SIZE; 
 //----------------------------------------------------
 
 typedef 1024 MAX_DEV_NUM;
@@ -116,7 +116,8 @@ function MacConfig getDefaultMacCfg();
         rtsThreshold: 1400,
         // exp value
         cwMin: 4,  //15
-        cwMax: 10, //1023
+        // cwMax: 10, //1023
+        cwMax: 6, //1023
         // enable
         filterEn: True,
         txopEn: False, // not supported yet
@@ -254,6 +255,11 @@ typedef struct {
     Bool cca;
     Bool fcsEn;
     Bool fcsCorrect;
+    Bool txStart;
+    Bool txEnd;
+    Bool rxStart;
+    Bool rxEnd;
+    PhyFsmState state;
 }PhyStatus deriving(Eq, Bits, Bounded, FShow);
 
 typedef struct {

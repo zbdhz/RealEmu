@@ -14,8 +14,8 @@ import Types::*;
 
 // typedef 64 NODE_NUM;
 
-typedef TLog#(NODE_NUM) NodeIdWidth;  // 10 bits
-typedef TDiv#(TLog#(NODE_NUM), TLog#(GROUP_SIZE)) TreeDepth;  // log32(1024)=2
+// typedef TLog#(NODE_NUM) NodeIdWidth;  // 10 bits
+// typedef TDiv#(TLog#(NODE_NUM), TLog#(GROUP_SIZE)) TreeDepth;  // log32(1024)=2
 
 typedef enum {MuxBegin, MuxEnd} MuxState deriving (Bits, Eq);
 
@@ -39,7 +39,8 @@ module mkArbiter(ArbiterIFC);
     // 轮询控制逻辑（保持原始结构）
     ///////////////////////////////////////////////////////////////////////////
     Reg#(Tuple2#(Bool, PhyEvent)) deMuxReg <- mkDReg(tuple2(False, getEmptyPhyEvent));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
+    // Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
+    Vector#(GROUP_SIZE, Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
 
     ///////////////////////////////////////////////////////////////////////////
     // 32叉树聚合逻辑

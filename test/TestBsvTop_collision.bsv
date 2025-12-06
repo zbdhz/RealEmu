@@ -22,9 +22,9 @@ import CfgBridge::*;
 // import BsvTop::*;
 import BsvTov_simple::*;
 
-typedef 4 TEST_NODE_NUM;
-typedef 200 Send_Delta_Time;
-typedef 20  Send_Pkt_Num;
+typedef 16 TEST_NODE_NUM;
+typedef 1000 Send_Delta_Time;
+typedef 500  Send_Pkt_Num;
 function String digitToChar(Integer d);
     case (d)
         0: return "0";
@@ -89,15 +89,17 @@ module mkTestRawEmuCore_collision(Empty);
     endrule
 
     // ==================== 发包规则 ====================//原生包发送（任务）
-    rule send1 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0);
+    rule send1 if(initialized && logFile != InvalidFile && (cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0)||(cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0));
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 1;
         txReq.dstMacId = 0;
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
         //txReq.mpduDigest.length = 2048;
-        txReq.rfParam.power = 40 + 578;//320有效
-        txReq.mpduDigest.length = 1; //使长度变化，用于每次打印出不同的rxReq
+        txReq.rfParam.power = 32*10 + 578;//320有效
+        txReq.mpduDigest.length = 1457; //使长度变化，用于每次打印出不同的rxReq
         txReq.rfParam.mcs = 0;
+        // txReq.mpduDigest.duration = 2164;
+        // txReq.mpduDigest.duration = 0;
         let bridgeTag = getEmptyBridgeTag();
         AxiStream#(KEEP_WIDTH, TUSER_WIDTH) axiPkt = AxiStream{
             tData: zeroExtend(pack(tuple2(txReq,bridgeTag))),
@@ -112,15 +114,17 @@ module mkTestRawEmuCore_collision(Empty);
     endrule
 
     // ==================== 发包规则 ====================//干扰包发送（任务）
-    rule send2 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200)== 1*200);
+    rule send2 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200)== 5*200);
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 2;
         txReq.dstMacId = 0;
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
         //txReq.mpduDigest.length = 2048;
-        txReq.rfParam.power = 200 +578;//320有效
-        txReq.mpduDigest.length = 1; //使长度变化，用于每次打印出不同的rxReq
+        txReq.rfParam.power = 32*10 +578;//320有效
+        txReq.mpduDigest.length = 1457; //使长度变化，用于每次打印出不同的rxReq
         txReq.rfParam.mcs = 0;
+        // txReq.mpduDigest.duration = 0;
+        // txReq.mpduDigest.duration = 2164;
         let bridgeTag = getEmptyBridgeTag();
         AxiStream#(KEEP_WIDTH, TUSER_WIDTH) axiPkt = AxiStream{
             tData: zeroExtend(pack(tuple2(txReq,bridgeTag))),
@@ -128,7 +132,7 @@ module mkTestRawEmuCore_collision(Empty);
             tLast: True,     // 假设每个MAC事件对应一个AXI包
             tUser: 0
         };
-        core.tx.put(axiPkt);
+        // core.tx.put(axiPkt);
         $display("Sent packet from %d to %d", txReq.srcMacId, txReq.dstMacId);
         $fwrite(logFile, "[%8d ns] Sent packet from %0d to %0d, cycleCount:%0d\n",$time,  txReq.srcMacId, txReq.dstMacId, cycleCount);
     endrule
@@ -159,7 +163,7 @@ module mkTestRawEmuCore_collision(Empty);
     // endrule
 
     rule simEnd if( sendingNodes == fromInteger(valueOf(Send_Pkt_Num)) + 1);
-        $fwrite(logFile, "Node1send_Num: %0d, Node1Received_Num: %0d, Node2Received_Num: %0d\n", sendingNodes, receivedFrom1, receivedFrom2);
+        $fwrite(logFile, "Node1send_Num: %0d, Node1Received_Num: %0d, Node2Received_Num: %0d\n", sendingNodes-1, receivedFrom1, receivedFrom2);
         $display("end");
         $finish();
     endrule

@@ -138,14 +138,22 @@ module mkNav#(
         Duration timeoutThresholdReg = zeroExtend(2 * macCfg.sifs + 2 * macCfg.slot + macCfg.sigTime + macCfg.ofdmSymbolTime * macCfg.maxNum + macCfg.phyDelayTime); //参考openwifi
         // 处理Duration字段
         if (frame.mpduDigest.duration[15] == 0) begin
-            // $display("duration = %0d",frame.mpduDigest.duration[14:0]);
-            if(zeroExtend(frame.mpduDigest.duration[14:0]) > timeoutThresholdReg) begin
+            // $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
+            if(zeroExtend(frame.mpduDigest.duration[14:0]) < timeoutThresholdReg) begin
                 newNavReg <= timeoutThresholdReg;
+                // $display("myid:%d, newNavReg = %0d",id,timeoutThresholdReg);
+                $display("my id:%0d, duration = %0d",id,timeoutThresholdReg);
+                // newNavReg <= zeroExtend(frame.mpduDigest.duration[14:0]);
             end
             else begin
+                $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
                 newNavReg <= zeroExtend(frame.mpduDigest.duration[14:0]);
             end
         end
+        // if (frame.mpduDigest.duration[15] == 0) begin
+        //     $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
+        //     newNavReg <= zeroExtend(frame.mpduDigest.duration[14:0]);
+        // end
     endmethod
 
     method Action resetNav();
@@ -195,8 +203,8 @@ module mkCsmaCaBackOff#(
     Reg#(Bool)       isSifsReg              <- mkReg(False);  // Option1: 是否是短帧间间隔类型退避
     Reg#(Bool)       isExpBackOffReg        <- mkReg(False);  // Option2: IFS退避后是否需要随机退避
 
-    let              expBackOffGen          <- mkExpBackoffGenerator;
-    let              navController          <- mkNav(usGen, id);  //检查逻辑发现可能是一个冗余项，暂时保留
+    let              expBackOffGen          <- mkExpBackoffGenerator(id);
+    let              navController          <- mkNav(usGen, id); 
     
     Reg#(TimeUs) suspendTimer <- mkReg(0);
     rule csmaFSM;
@@ -250,7 +258,7 @@ module mkCsmaCaBackOff#(
                             csmaStateReg <= CSMA_BACKOFF;
                             let randWaitTime <- expBackOffGen.next.get;
                             waitTimeReg <= randWaitTime;
-                            // immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, Enter ExpWindow BackOff, randWaitTime = ", id, randWaitTime));
+                            immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, Enter ExpWindow BackOff, randWaitTime = ", id, randWaitTime));
                         end
                         // 只进行IFS退避，无需进行随机退避
                         else begin
@@ -360,7 +368,8 @@ endmodule
 (* always_enabled = "phyStatus.put" *)
 // (* synthesize *)
 module mkMacDCF#(Integer id)(MacCore);
-    FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
+    // FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
+    FIFOF#(MacEvent)    highMacTxReqQ  <- mkSizedFIFOF(10);
     FIFOF#(GenericResp) highMacTxRespQ <- mkFIFOF;
     FIFOF#(MacEvent)    highMacRxReqQ  <- mkFIFOF;
     FIFOF#(GenericResp) highMacRxRespQ <- mkFIFOF;
@@ -369,6 +378,9 @@ module mkMacDCF#(Integer id)(MacCore);
     FIFOF#(GenericResp) lowMacTxRespQ  <- mkFIFOF;
     FIFOF#(MacEvent)    lowMacRxReqQ   <- mkFIFOF;
     FIFOF#(GenericResp) lowMacRxRespQ  <- mkFIFOF;
+
+    FIFOF#(MacEvent)    lowMacRxYesToMEReqQ  <- mkLFIFOF;
+    FIFOF#(MacEvent)    lowMacRxNotToMEReqQ  <- mkLFIFOF;
 
     Reg#(MacConfig)  macCfgReg      <- mkReg(getDefaultMacCfg);
     Reg#(MacStatus)  macStaReg      <- mkReg(MacStatus{backOffState:CSMA_IDLE, dcfState:DCF_IDLE});
@@ -381,6 +393,7 @@ module mkMacDCF#(Integer id)(MacCore);
     Reg#(DcfState)       dcfStateReg        <- mkReg(DCF_IDLE);
     Reg#(RetryTime)      retransCountReg    <- mkReg(0);
     Reg#(TimeUs)         ackTimeoutCountReg <- mkReg(0);
+    Reg#(TimeUs)         ctsTimeoutCountReg <- mkReg(0);
 
 `ifdef BSIM
     TimeGen              usGen              <- mkUsGen(1);
@@ -398,14 +411,44 @@ module mkMacDCF#(Integer id)(MacCore);
         highMacRxRespQ.deq;
     endrule
 
-    rule dcfFsmIdle if (dcfStateReg == DCF_IDLE);
+    (* descending_urgency = "dcfFsmIdle, rxRegcopy" *)
+    (* descending_urgency = "updateNAV, rxRegcopy" *)
+    //区分目的地址是否指向自己
+    rule rxRegcopy if(lowMacRxReqQ.notEmpty);
+        let rxReq = lowMacRxReqQ.first;
+        rxReq.status = True;
+        if(lowMacRxYesToMEReqQ.notFull) begin
+            lowMacRxYesToMEReqQ.enq(rxReq);
+        end
+        if(lowMacRxNotToMEReqQ.notFull && !isMyFrame(id, rxReq.dstMacId)) begin
+            lowMacRxNotToMEReqQ.enq(rxReq);
+        end
+        lowMacRxReqQ.deq;
+        lowMacRxRespQ.enq(GenericResp{});
+    endrule
+
+    
+
+    rule updateNAV;
+        if(lowMacRxNotToMEReqQ.notEmpty) begin
+            let rxReq = lowMacRxNotToMEReqQ.first;
+            // if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)|| isDataFrame(rxReq.mpduDigest)) begin
+            if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)) begin
+                backOffFsm.navctrl.handleFrame(rxReq);       //新增nav逻辑
+                $display("[%8d ns] update nav in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
+            end
+            lowMacRxNotToMEReqQ.deq;
+        end
+    endrule
+
+        rule dcfFsmIdle if (dcfStateReg == DCF_IDLE);
             let nextTask = nextTaskReg;
             let state = DCF_IDLE;
             ackTimeoutCountReg <= 0;
             // Phy->lowMac接收队列非空, 进入接收处理逻辑
-            if (lowMacRxReqQ.notEmpty) begin
-                // $display("lowMacRxReqQ.notEmpty");
-                let rxReq = lowMacRxReqQ.first;
+            if (lowMacRxYesToMEReqQ.notEmpty) begin
+                // $display("lowMacRxYesToMEReqQ.notEmpty");
+                let rxReq = lowMacRxYesToMEReqQ.first;
                 if (isMyFrame(id, rxReq.dstMacId) && isDataFrame(rxReq.mpduDigest)) begin
                     // 收到Data帧，需要回复ACK，先退避SIFS
                     nextTask = NT_SEND_ACK;
@@ -413,7 +456,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     backOffFsm.start(tuple2(True, False)); //SIFS 
                     rxReq.status = True;
                     highMacRxReqQ.enq(rxReq);
-                    $display("recv pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
+                    $display("[%8d ns] recv data pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,rxReq.dstMacId);
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive DATA", id));
                 end
                 else if (isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
@@ -422,17 +465,12 @@ module mkMacDCF#(Integer id)(MacCore);
                     state = DCF_WAIT_BACKOFF;
                     backOffFsm.start(tuple2(True, False)); //SIFS 
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive RTS", id));
-                end
-                else if (!isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
-                    backOffFsm.navctrl.handleFrame(rxReq);       //新增nav逻辑
-                    lowMacRxReqQ.deq;
-                    lowMacRxRespQ.enq(GenericResp{});
-                end
+                end 
                 else begin
                     // 直接丢弃
-                    lowMacRxReqQ.deq;
+                    lowMacRxYesToMEReqQ.deq;
                     // $display("throw pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
-                    lowMacRxRespQ.enq(GenericResp{});
+                    // lowMacRxRespQ.enq(GenericResp{});
                     // else do nothing.
                 end
             end
@@ -449,6 +487,7 @@ module mkMacDCF#(Integer id)(MacCore);
                         end
                         else begin
                             nextTask = NT_SEND_DATA;
+                            ctsTimeoutCountReg <= 0;
                         end
                     end
                     else if (nextTaskReg == NT_SEND_DATA) begin
@@ -473,8 +512,8 @@ module mkMacDCF#(Integer id)(MacCore);
         // endrule
 
         // 更新下发参考值
-        rule updateCtlFramPower;
-            if(highMacTxReqQ.notEmpty) begin
+        rule updateCtlFramPower(dcfStateReg == DCF_IDLE && highMacTxReqQ.notEmpty);
+            begin
             lasthighMacTxReq <= highMacTxReqQ.first;
             // immLog("mkMacDcf", "updatepower", $format("Id %5d, update power:%d", id, lasthighMacTxReq.rfParam.power));
             end
@@ -487,63 +526,121 @@ module mkMacDCF#(Integer id)(MacCore);
                 NT_SEND_RTS: begin
                     // 第一次BackOff，发送RTS帧
                     let refFrame = highMacTxReqQ.first;
-                    let rtsFrame = setRtsFrame(refFrame);
+                    let rtsFrame = setRtsFrame(refFrame);//隐藏条件，用refFrame中的NAV数值
                     lowMacTxReqQ.enq(rtsFrame);
                     dcfStateReg <= DCF_RECV_CTSACK;
                     nextTaskReg <= NT_RECV_CTS;
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send RTS", id));
+                    $display("[%8d ns] send rts pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
+                    ctsTimeoutCountReg <= 0;
                     end
                 NT_SEND_DATA: begin
+                    if(ctsTimeoutCountReg >= macCfgReg.timeout) begin
+                        dcfStateReg <= DCF_IDLE;
+                        nextTaskReg <= NT_IDLE;
+                        if (retransCountReg < macCfgReg.retryLimit) begin
+                            retransCountReg <= retransCountReg + 1;
+                            backOffFsm.incrCW;  // 失败后增大退避窗口
+                            immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit in send data duration", id));
+                        end 
+                        // 超过重试次数，发送失败
+                        else begin
+                            retransCountReg <= 0;
+                            backOffFsm.resetCW;  // 重置窗口
+                            highMacTxReqQ.deq;
+                            let txReq = highMacTxReqQ.first;
+                            // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
+                            txReq.status = False;
+                            // highMacRxReqQ.enq(txReq);
+                        end
+                    end
+                    else begin
                     // 已经收到过CTS，或者无需RTS/CRS, 发送Data
-                    let refFrame = highMacTxReqQ.first;
-                    lowMacTxReqQ.enq(refFrame);
-                    dcfStateReg <= DCF_RECV_CTSACK;
-                    nextTaskReg <= NT_RECV_ACK;
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send Data", id));
+                        let refFrame = highMacTxReqQ.first;
+                        refFrame.mpduDigest.duration = macCfgReg.sifs+ fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(ACK_MPDU_TIME_us));//待完善 10： SIFS; 48: synctime;  20: acktime
+                        lowMacTxReqQ.enq(refFrame);
+                        dcfStateReg <= DCF_RECV_CTSACK;
+                        nextTaskReg <= NT_RECV_ACK;
+                        // immLog("mkMacDcf", "dcfFSM", $format("[%8d ns] Id %5d, Send Data", id, id));
+                        $display("[%8d ns] send data pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
+                    end
+                    ctsTimeoutCountReg <= 0;
                 end
                 NT_SEND_CTS: begin
                     // 回复CTS
-                    let refFrame = lowMacRxReqQ.first;
-                    refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;    
-                    lowMacRxReqQ.deq;
-                    lowMacRxRespQ.enq(GenericResp{});
+                    let refFrame = lowMacRxYesToMEReqQ.first;
+                    refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
+                    refFrame.mpduDigest.duration = (refFrame.mpduDigest.duration > (macCfgReg.sifs + fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(RTS_MPDU_TIME_us)))) ? refFrame.mpduDigest.duration - (macCfgReg.sifs + fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(RTS_MPDU_TIME_us))) : 0;
+                    lowMacRxYesToMEReqQ.deq;
+                    // lowMacRxRespQ.enq(GenericResp{});
                     let ctsFrame = setCtsFrame(id, refFrame);
                     lowMacTxReqQ.enq(ctsFrame);
                     dcfStateReg <= DCF_IDLE;
                     nextTaskReg <= NT_RECV_DATA;
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send CTS", id));
+                    $display("[%8d ns] send cts pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,ctsFrame.dstMacId);
                 end
                 NT_SEND_ACK: begin
                     // 回复ACK
-                    if(lowMacRxReqQ.notEmpty) begin
-                        let refFrame = lowMacRxReqQ.first;
+                    if(lowMacRxYesToMEReqQ.notEmpty) begin
+                        let refFrame = lowMacRxYesToMEReqQ.first;
                         refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
-                        lowMacRxReqQ.deq;
-                        lowMacRxRespQ.enq(GenericResp{});
+                        refFrame.mpduDigest.duration = 0;
+                        lowMacRxYesToMEReqQ.deq;
+                        // lowMacRxRespQ.enq(GenericResp{});
                         let ackFrame = setAckFrame(id, refFrame);
                         lowMacTxReqQ.enq(ackFrame);
                         dcfStateReg <= DCF_IDLE;
                         nextTaskReg <= NT_IDLE;
+                        $display("[%8d ns] send ACK pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id, ackFrame.dstMacId);
                     end
                 // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send ACK", id));
                 end
                 endcase
+            end 
+            //需要补充逻辑，就算是在非done部分收到发给自己的帧，也需要处理。回idle重新开始
+            else if(ctsTimeoutCountReg != 0)begin
+                if (usGen.get)
+                    ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
             end
         endrule
 
         // 等待对端反馈
         rule dcfRecvCtsAck if (dcfStateReg == DCF_RECV_CTSACK);
-            let rxReq = lowMacRxReqQ.first;
+            let rxReq = lowMacRxYesToMEReqQ.first;
             let nextTask = nextTaskReg;
             let state = dcfStateReg;
-            if (usGen.get)
+            // if (usGen.get)
+            if(ackTimeoutCountReg == 0)begin
+                if(phyStatusWire.txEnd == True) begin
+                        ackTimeoutCountReg <= ackTimeoutCountReg + 1;
+                        $display("reset ackTimeoutCountReg: %d\n", ackTimeoutCountReg);
+                end
+            end
+            if(ackTimeoutCountReg != 0)begin
+                if (usGen.get)
                 ackTimeoutCountReg <= ackTimeoutCountReg + 1;
-            if (lowMacRxReqQ.notEmpty) begin
+            end
+
+            if(ctsTimeoutCountReg == 0)begin
+                if(phyStatusWire.txEnd == True) begin
+                        ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
+                        $display("reset ctsTimeoutCountReg: %d\n", ctsTimeoutCountReg);
+                end
+            end
+            if(ctsTimeoutCountReg != 0)begin
+                if (usGen.get)
+                ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
+            end
+            
+                // ackTimeoutCountReg <= ackTimeoutCountReg + 1;
+            if (lowMacRxYesToMEReqQ.notEmpty) begin
                 if (isMyFrame(id, rxReq.dstMacId) && isCtsFrame(rxReq.mpduDigest)) begin
                     // 收到了CTS，准备发送DATA
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive CTS", id));
-                    lowMacRxReqQ.deq;
-                    lowMacRxRespQ.enq(GenericResp{});
+                    $display("[%8d ns] recv cts pkt in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
+                    lowMacRxYesToMEReqQ.deq;
+                    // lowMacRxRespQ.enq(GenericResp{});
                     state = DCF_IDLE;
                     nextTask = NT_SEND_DATA;
                 end
@@ -551,8 +648,9 @@ module mkMacDCF#(Integer id)(MacCore);
                     // 收到了ACK，结束一次发送
                     // TODO: Block ACK 如何处理？？
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive ACK", id));
-                    lowMacRxReqQ.deq;
-                    lowMacRxRespQ.enq(GenericResp{});
+                    $display("[%8d ns] recv ACK pkt in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
+                    lowMacRxYesToMEReqQ.deq;
+                    // lowMacRxRespQ.enq(GenericResp{});
                     backOffFsm.resetCW;  // 重置窗口
                     nextTask = NT_IDLE;
                     state = DCF_IDLE;
@@ -561,8 +659,21 @@ module mkMacDCF#(Integer id)(MacCore);
                     retransCountReg <= 0;
                 end
                 else begin
-                    // 非预期的包，直接丢弃
-                    lowMacRxReqQ.deq;
+                    lowMacRxYesToMEReqQ.deq;
+                    // lowMacRxRespQ.enq(GenericResp{});
+                    if (retransCountReg < macCfgReg.retryLimit) begin
+                        retransCountReg <= retransCountReg + 1;
+                        backOffFsm.incrCW;  // 失败后增大退避窗口
+                        immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
+                    end 
+                    // 超过重试次数，发送失败
+                    else begin
+                        retransCountReg <= 0;
+                        backOffFsm.resetCW;  // 重置窗口
+                        highMacTxReqQ.deq;
+                        let txReq = highMacTxReqQ.first;
+                        txReq.status = False;
+                    end
                 end
             end
             // CTS/ACK超时，重新进入发送流程
@@ -586,6 +697,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     txReq.status = False;
                     // highMacRxReqQ.enq(txReq);
                 end
+                //更新NAV
             end
             dcfStateReg <= state;
             nextTaskReg <= nextTask;

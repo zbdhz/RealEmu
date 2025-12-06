@@ -27,6 +27,11 @@ typedef 20 RTS_MPDU_LEN;
 typedef 14 CTS_MPDU_LEN;
 typedef 14 ACK_MPDU_LEN;
 
+typedef 20 CYNC_MPDU_TIME_us;
+typedef 28 RTS_MPDU_TIME_us;
+typedef 20 CTS_MPDU_TIME_us;
+typedef 20 ACK_MPDU_TIME_us;
+
 function Bool isMyFrame(Integer id, MacId dstMacId);
     return (fromInteger(id) == dstMacId);
 endfunction
@@ -96,14 +101,15 @@ interface ExpBackOffGenerator;
     interface Put#(MacConfig) configure;    // 配置退避状态机参数
 endinterface
 
-module mkExpBackoffGenerator(ExpBackOffGenerator);
+module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
     FIFO#(TimeSlot)  resultQ  <- mkFIFO;
     Reg#(Bool)       initReg  <- mkReg(False);
     Reg#(MacConfig)  cfgReg   <- mkReg(getDefaultMacCfg);
     Reg#(ContWindowExp) cwExpReg <- mkReg(getDefaultMacCfg.cwMin);
   
     LFSR#(Bit#(16))  lfsr        <- mkLFSR_16;
-    Reg#(Bit#(2))    randSeedReg <- mkReg(0);
+    Reg#(Bit#(10))    randSeedReg <- mkReg(fromInteger(id));
+    // Reg#(Bit#(10))    randSeedReg <- mkReg(0);
 
     rule init if (!initReg);
         initReg <= True;
