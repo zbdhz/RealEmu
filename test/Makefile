@@ -15,11 +15,17 @@ include ../Makefile.base
 # TESTFILE ?= TestBsvTop_collision.bsv 
 # TOPMODULE ?= mkTestRawEmuCore_collision
 
-TESTFILE ?= TestBsvTop_bianchi.bsv 
-TOPMODULE ?= mkTestRawEmuCore_bianchi
+# TESTFILE ?= TestBsvTop_bianchi.bsv 
+# TOPMODULE ?= mkTestRawEmuCore_bianchi
 
 # TESTFILE ?= TestPhySinrStats.bsv
 # TOPMODULE ?= mkTestPhySinrStats
+
+# TESTFILE ?= TestTop_cfg.bsv
+# TOPMODULE ?= mkTestTop_cfg
+
+TESTFILE ?= Param_test.bsv
+TOPMODULE ?= mkTestParameter
 
 # TESTFILE ?= TestMacBridge.bsv
 # TOPMODULE ?= mkTestMacBridge

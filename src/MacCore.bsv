@@ -38,70 +38,82 @@ interface MacCore;
     interface MacSrv lowMacRxSrv;
     interface MacClt lowMacTxClt;
 
-    interface Put#(MacConfig) configure;
+    // interface Put#(MacConfig) putmaccfg;
+    // interface Get#(MacConfig) getmaccfg;
+    // interface MacConfigSrv macConfigSrv;      // MAC配置服务器
+    // interface MacStatusSrv macStatusSrv;   
+    interface RegAccessSrv macRegSrv;
+
     interface Put#(PhyStatus) phyStatus;
 endinterface
 
 // A Fake MAC without any access control
-(* always_enabled = "phyStatus.put" *)
-module mkMacPipe#(Integer id)(MacCore);
-    FIFO#(MacEvent)    highMacTxReqQ  <- mkFIFO;
-    FIFO#(GenericResp) highMacTxRespQ <- mkFIFO;
-    FIFO#(MacEvent)    highMacRxReqQ  <- mkFIFO;
-    FIFO#(GenericResp) highMacRxRespQ <- mkFIFO;
+// (* always_enabled = "phyStatus.put" *)
+// module mkMacPipe#(Integer id)(MacCore);
+//     FIFO#(MacEvent)    highMacTxReqQ  <- mkFIFO;
+//     FIFO#(GenericResp) highMacTxRespQ <- mkFIFO;
+//     FIFO#(MacEvent)    highMacRxReqQ  <- mkFIFO;
+//     FIFO#(GenericResp) highMacRxRespQ <- mkFIFO;
 
-    FIFO#(MacEvent)    lowMacTxReqQ   <- mkFIFO;
-    FIFO#(GenericResp) lowMacTxRespQ  <- mkFIFO;
-    FIFO#(MacEvent)    lowMacRxReqQ   <- mkFIFO;
-    FIFO#(GenericResp) lowMacRxRespQ  <- mkFIFO;
+//     FIFO#(MacEvent)    lowMacTxReqQ   <- mkFIFO;
+//     FIFO#(GenericResp) lowMacTxRespQ  <- mkFIFO;
+//     FIFO#(MacEvent)    lowMacRxReqQ   <- mkFIFO;
+//     FIFO#(GenericResp) lowMacRxRespQ  <- mkFIFO;
 
-    Reg#(MacConfig)  macCfgReg      <- mkReg(getDefaultMacCfg);
-    Reg#(MacStatus)  macStaReg      <- mkReg(MacStatus{backOffState:CSMA_IDLE, dcfState:DCF_IDLE});
+//     Reg#(MacConfig)  macCfgReg      <- mkReg(getDefaultMacCfg);
+//     Reg#(MacStatus)  macStaReg      <- mkReg(MacStatus{backOffState:CSMA_IDLE, dcfState:DCF_IDLE});
 
-    Wire#(PhyStatus)  phyStatusWire <- mkBypassWire;
+//     Wire#(PhyStatus)  phyStatusWire <- mkBypassWire;
 
-    rule forwardTx;
-        let txReq = highMacTxReqQ.first;
-        highMacTxReqQ.deq;
-        highMacTxRespQ.enq(GenericResp{});
-        lowMacTxReqQ.enq(txReq);
-    endrule
+//     rule forwardTx;
+//         let txReq = highMacTxReqQ.first;
+//         highMacTxReqQ.deq;
+//         highMacTxRespQ.enq(GenericResp{});
+//         lowMacTxReqQ.enq(txReq);
+//     endrule
 
-    rule handshakeTx;
-        lowMacTxRespQ.deq;
-    endrule
+//     rule handshakeTx;
+//         lowMacTxRespQ.deq;
+//     endrule
 
-    rule forwardRx;
-        let rxReq = lowMacRxReqQ.first;
-        lowMacRxReqQ.deq;
-        if (rxReq.dstMacId == fromInteger(id)) begin
-            highMacRxReqQ.enq(rxReq);
-        end
-    endrule
+//     rule forwardRx;
+//         let rxReq = lowMacRxReqQ.first;
+//         lowMacRxReqQ.deq;
+//         if (rxReq.dstMacId == fromInteger(id)) begin
+//             highMacRxReqQ.enq(rxReq);
+//         end
+//     endrule
 
-    rule handshakeRx;
-        highMacRxRespQ.deq;
-    endrule
+//     rule handshakeRx;
+//         highMacRxRespQ.deq;
+//     endrule
 
-    interface highMacTxSrv = toGPServer(highMacTxReqQ, highMacTxRespQ);
-    interface highMacRxClt = toGPClient(highMacRxReqQ, highMacRxRespQ);
-    interface lowMacTxClt  = toGPClient(lowMacTxReqQ, lowMacTxRespQ);
-    interface lowMacRxSrv  = toGPServer(lowMacRxReqQ, lowMacRxRespQ);
+//     interface highMacTxSrv = toGPServer(highMacTxReqQ, highMacTxRespQ);
+//     interface highMacRxClt = toGPClient(highMacRxReqQ, highMacRxRespQ);
+//     interface lowMacTxClt  = toGPClient(lowMacTxReqQ, lowMacTxRespQ);
+//     interface lowMacRxSrv  = toGPServer(lowMacRxReqQ, lowMacRxRespQ);
     
-    interface Put phyStatus;
-        method Action put(PhyStatus phyStatus);
-            phyStatusWire <= phyStatus;
-        endmethod
-    endinterface
+//     interface Put phyStatus;
+//         method Action put(PhyStatus phyStatus);
+//             phyStatusWire <= phyStatus;
+//         endmethod
+//     endinterface
 
-    interface Put configure;
-        method Action put(MacConfig cfg);
-            macCfgReg <= cfg;
-        endmethod
-    endinterface
+//     // interface Put putmaccfg;
+//     //     method Action put(MacConfig cfg);
+//     //         macCfgReg <= cfg;
+//     //     endmethod
+//     // endinterface
+
+//     // interface Get getmaccfg;
+//     //     method ActionValue#(MacConfig) get;
+//     //         let cfg = macCfgReg;
+//     //         return cfg;
+//     //     endmethod
+//     // endinterface
     
-    //interface configSrv    = toGPServer(configReqQ, configRespQ);
-endmodule
+//     //interface configSrv    = toGPServer(configReqQ, configRespQ);
+// endmodule
 
 // ============================= 802.11 NAV ==============================
 interface Nav_IFC;
@@ -109,7 +121,7 @@ interface Nav_IFC;
     method Action               resetNav();                         // 强制复位NAV
     method Duration             getNavValue();                      // 获取当前NAV值
     method Bool                 isNavWaiting();                     // NAV是否等待完成
-    interface Put#(MacConfig)   configure;                          // 配置参数
+    interface Put#(MacConfig)   putmaccfg;                          // 配置参数
 endinterface
 
 module mkNav#(
@@ -164,7 +176,7 @@ module mkNav#(
     
     method Bool isNavWaiting() = (navReg != 0);
 
-    interface Put configure;
+    interface Put putmaccfg;
         method Action put(MacConfig cfg);
             macCfg <= cfg;
         endmethod
@@ -180,7 +192,7 @@ interface CsmaBackOff_IFC;
     method Bool      available();           // 退避模块是否可用，仅当可用时调用start
     method CsmaState getStatus();           // 获取退避状态机当前状态
     method Bool      done();                // 退避完成
-    interface Put#(MacConfig) configure;    // 配置退避状态机参数
+    interface Put#(MacConfig) putmaccfg;    // 配置退避状态机参数
     interface Nav_IFC navctrl;
 endinterface
 
@@ -351,10 +363,10 @@ module mkCsmaCaBackOff#(
     endmethod
 
     // 配置参数
-    interface Put configure;
+    interface Put putmaccfg;
         method Action put(MacConfig macCfg);
             macCfgReg <= macCfg;
-            expBackOffGen.configure.put(macCfg);
+            expBackOffGen.putmaccfg.put(macCfg);
         endmethod
     endinterface
 
@@ -369,7 +381,7 @@ endmodule
 // (* synthesize *)
 module mkMacDCF#(Integer id)(MacCore);
     // FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
-    FIFOF#(MacEvent)    highMacTxReqQ  <- mkSizedFIFOF(10);
+    FIFOF#(MacEvent)    highMacTxReqQ  <- mkSizedFIFOF(MAC_FIFOIN_DEPTH);
     FIFOF#(GenericResp) highMacTxRespQ <- mkFIFOF;
     FIFOF#(MacEvent)    highMacRxReqQ  <- mkFIFOF;
     FIFOF#(GenericResp) highMacRxRespQ <- mkFIFOF;
@@ -378,6 +390,12 @@ module mkMacDCF#(Integer id)(MacCore);
     FIFOF#(GenericResp) lowMacTxRespQ  <- mkFIFOF;
     FIFOF#(MacEvent)    lowMacRxReqQ   <- mkFIFOF;
     FIFOF#(GenericResp) lowMacRxRespQ  <- mkFIFOF;
+
+    //新增配置查询和下发接口
+    FIFOF#(MacConfigReq)  macConfigReqQ   <- mkFIFOF;
+    FIFOF#(MacConfigRes)  macConfigRespQ  <- mkFIFOF;
+    FIFOF#(MacStatusReq)  macStatusReqQ   <- mkFIFOF;
+    FIFOF#(MacStatusRes)  macStatusRespQ  <- mkFIFOF;
 
     FIFOF#(MacEvent)    lowMacRxYesToMEReqQ  <- mkLFIFOF;
     FIFOF#(MacEvent)    lowMacRxNotToMEReqQ  <- mkLFIFOF;
@@ -703,12 +721,44 @@ module mkMacDCF#(Integer id)(MacCore);
             nextTaskReg <= nextTask;
         endrule
 
+    rule handlemacConfig;
+        if(macConfigReqQ.notEmpty) begin
+            let req = macConfigReqQ.first;
+            macConfigReqQ.deq;
+            case(req.macReqTag.rwMode)
+                MOD_WRITE: begin
+                    macCfgReg <= req.macConfig;
+                    let resp = getEmptyMacConfigResp();
+                    resp.macConfig = req.macConfig;
+                    macConfigRespQ.enq(resp);
+                end
+                MOD_READ: begin
+                    let resp = getEmptyMacConfigResp();
+                    resp.macConfig = macCfgReg;
+                    macConfigRespQ.enq(resp);
+                end
+            endcase
+        end
+    endrule
+
+    rule handlemacStatus;
+        if(macStatusReqQ.notEmpty) begin
+            let req = macStatusReqQ.first;
+            macStatusReqQ.deq;
+            let resp = getEmptyMacStatusResp();
+            resp.dcfState    = dcfStateReg;
+            resp.dcfNextTask = nextTaskReg;
+            macStatusRespQ.enq(resp);
+        end
+    endrule
 
 
     interface highMacTxSrv = toGPServer(highMacTxReqQ, highMacTxRespQ);
     interface highMacRxClt = toGPClient(highMacRxReqQ, highMacRxRespQ);
     interface lowMacTxClt  = toGPClient(lowMacTxReqQ, lowMacTxRespQ);
     interface lowMacRxSrv  = toGPServer(lowMacRxReqQ, lowMacRxRespQ);
+    interface macConfigSrv = toGPServer(macConfigReqQ, macConfigRespQ);
+    interface macStatusSrv = toGPServer(macStatusReqQ, macStatusRespQ);
 
     interface Put phyStatus;
         method Action put(PhyStatus phyStatus);
@@ -716,9 +766,19 @@ module mkMacDCF#(Integer id)(MacCore);
         endmethod
     endinterface
 
-    interface Put configure;
-        method Action put(MacConfig cfg);
-            macCfgReg <= cfg;
-        endmethod
-    endinterface
+    // interface Put putmaccfg;
+    //     method Action put(MacConfig cfg);
+    //         macCfgReg <= cfg;
+    //         backOffFsm.putmaccfg(cfg);
+    //     endmethod
+    // endinterface
+
+    // interface Get getmaccfg;
+    //     ActionValue#(MacConfig) get;
+    //         let cfg = macCfgReg;
+    //         return cfg;
+    //     endmethod
+    // endinterface
+
+
 endmodule

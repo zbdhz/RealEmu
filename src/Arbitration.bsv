@@ -39,8 +39,8 @@ module mkArbiter(ArbiterIFC);
     // 轮询控制逻辑（保持原始结构）
     ///////////////////////////////////////////////////////////////////////////
     Reg#(Tuple2#(Bool, PhyEvent)) deMuxReg <- mkDReg(tuple2(False, getEmptyPhyEvent));
-    // Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
-    Vector#(GROUP_SIZE, Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
+    // Vector#(GROUP_SIZE, Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
 
     ///////////////////////////////////////////////////////////////////////////
     // 32叉树聚合逻辑

@@ -37,6 +37,7 @@ import Channel::*;
 import Arbitration::*;
 import MacBridge::*;
 import CfgBridge::*;
+import Axi4LiteTypes::*;
 
 // typedef 32 NODE_NUM;
 typedef 512 DATA_WIDTH;
@@ -47,10 +48,12 @@ typedef 32  CONFIG_WIDTH;
 
 typedef RawAxiStreamMaster#(KEEP_WIDTH, TUSER_WIDTH) DmaAxiMaster;
 typedef RawAxiStreamSlave#(KEEP_WIDTH, TUSER_WIDTH)  DmaAxiSlave;
+typedef RawAxi4LiteSlave#(AXI_ADDR_WIDTH, TDiv#(AXI_DATA_WIDTH, BYTE_WIDTH)) DmaAxiLiteSlave;
 
 interface RawEmuCore;
     interface DmaAxiMaster dmaAxiMaster;
     interface DmaAxiSlave dmaAxiSlave;
+    interface DmaAxiLiteSlave dmaAxiLiteSlave;
 endinterface
 
 (* synthesize *)
@@ -66,7 +69,7 @@ endmodule
 interface EmuCore;
     interface Get#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) rx;
     interface Put#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) tx;
-
+    interface DmaAxiLiteSlave dmaAxiLiteSlave;
 endinterface
 
 (* synthesize *)

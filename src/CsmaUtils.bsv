@@ -98,7 +98,7 @@ interface ExpBackOffGenerator;
     method Action    incrCW();              // 碰撞后指数增长窗口
     method Action    resetCW();             // 成功接收窗口重置
     interface Get#(TimeSlot)  next;         // 获取下一个随机退避窗口大小
-    interface Put#(MacConfig) configure;    // 配置退避状态机参数
+    interface Put#(MacConfig) putmaccfg;    // 配置退避状态机参数
 endinterface
 
 module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
@@ -175,7 +175,7 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
 
     interface next = toGet(resultQ);
 
-    interface Put configure;
+    interface Put putmaccfg;
         method Action put(MacConfig cfg);
             cfgReg <= cfg;
         endmethod

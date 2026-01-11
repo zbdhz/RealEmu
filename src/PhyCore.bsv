@@ -42,9 +42,9 @@ interface PhyCore;
     interface PhySrv phyRxSrv;
     interface PhyClt phyTxClt;
 
-    //interface PhyCfgSrv configSrv;
-
-    method PhyStatus getPhyStatus;
+    interface PhyStatusSrv phyStatusSrv;
+    interface Get#(PhyStatus) getPhyStatus;
+    // method PhyStatus getPhyStatus;
 endinterface
 
 ///============================= phyState =====================================
@@ -61,6 +61,9 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     FIFOF#(GenericResp) phyTxRespQ        <- mkFIFOF;
     FIFOF#(PhyEvent)    phyRxReqQ         <- mkFIFOF;
     FIFOF#(GenericResp) phyRxRespQ        <- mkFIFOF;
+
+    FIFOF#(PhyStatusReq) phyStatusReqQ     <- mkFIFOF;
+    FIFOF#(PhyStatusRes) phyStatusRespQ    <- mkFIFOF;
 
     `ifdef BSIM
         UInt#(32)  clkFreq      = 1;   //the clock freq (/MHz)
@@ -167,7 +170,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             let phyRxpkt = phyRxReqQ.first;
             phyRxReqQ.deq;
             phyRxRespQ.enq(GenericResp{});
-            
+
             rxValidReg  <= True;
             rxSrcipReg  <= phyRxpkt.srcPhyId;
             rxDstipReg  <= phyRxpkt.dstPhyId;
@@ -550,6 +553,26 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
               cycleCount <= cycleCount + 1;
     endrule
 
+    rule handlephyStatusReq;
+        if (phyStatusReqQ.notEmpty) begin
+            let req = phyStatusReqQ.first;
+            phyStatusReqQ.deq;
+            let resp = getEmptyPhyStatusResp();
+            let newPhyStatus = PhyStatus {
+                cca         : ccaBusyReg,
+                fcsEn       : rxEndReg,
+                fcsCorrect  : crcReg,
+                txStart     : txBeginReg,
+                txEnd       : txEndReg,
+                rxStart     : rxBeginReg,
+                rxEnd       : rxEndReg,
+                state       : stateReg
+            };
+            resp.phyStatus = newPhyStatus;
+            phyStatusRespQ.enq(resp);
+        end
+    endrule
+
     //---------------------------
     // interface method
     //---------------------------
@@ -558,26 +581,23 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
 
     interface phyTxClt    = toGPClient(phyTxReqQ, phyTxRespQ);
     interface phyRxSrv    = toGPServer(phyRxReqQ, phyRxRespQ);
-    // Bool cca;
-    // Bool fcsEn;
-    // Bool fcsCorrect;
-    // Bool txStart;
-    // Bool txEnd;
-    // Bool rxStart;
-    // Bool rxEnd;
-    // PhyFsmState state;
-    method PhyStatus getPhyStatus;
-        return PhyStatus {
-            cca         : ccaBusyReg,
-            fcsEn       : rxEndReg,
-            fcsCorrect  : crcReg,
-            txStart     : txBeginReg,
-            txEnd       : txEndReg,
-            rxStart     : rxBeginReg,
-            rxEnd       : rxEndReg,
-            state       : stateReg
+
+    interface phyStatusSrv = toGPServer(phyStatusReqQ, phyStatusRespQ);
+
+    interface Get getPhyStatus;
+        method ActionValue#(PhyStatus) get;
+            return PhyStatus {
+                cca         : ccaBusyReg,
+                fcsEn       : rxEndReg,
+                fcsCorrect  : crcReg,
+                txStart     : txBeginReg,
+                txEnd       : txEndReg,
+                rxStart     : rxBeginReg,
+                rxEnd       : rxEndReg,
+                state       : stateReg
             };
-    endmethod
+        endmethod
+    endinterface
 endmodule
 
 

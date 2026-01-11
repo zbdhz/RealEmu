@@ -20,8 +20,8 @@ import ClientServer::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 64 NODE_NUM;
-typedef 8  GROUP_SIZE; 
+typedef 4 NODE_NUM;
+typedef 2  GROUP_SIZE; 
 //----------------------------------------------------
 
 typedef 1024 MAX_DEV_NUM;
@@ -34,6 +34,7 @@ typedef 2  FC_TYPE_WIDTH;
 typedef 4  FC_SUB_WIDTH;
 typedef 16 FC_WIDTH;
 typedef 16 DI_WIDTH;
+typedef 10 MAC_FIFOIN_DEPTH;//MAC上层包的硬件缓存深度
 
 typedef 4 MCS_WIDRH;
 
@@ -140,7 +141,7 @@ typedef enum {
     DCF_IDLE,
     DCF_WAIT_BACKOFF,
     DCF_RECV_CTSACK
-} DcfState deriving (Bits, Eq, FShow);
+} DcfState deriving (Bits, Eq, Bounded, FShow);
 
 typedef enum {
     NT_IDLE,
@@ -153,7 +154,7 @@ typedef enum {
     NT_SEND_CTS,
     NT_RECV_DATA,
     NT_SEND_ACK
-} DcfNextTask deriving(Eq, Bits, FShow); 
+} DcfNextTask deriving(Eq, Bits, Bounded, FShow); 
 
 typedef struct {
     CsmaState backOffState;
@@ -171,6 +172,10 @@ endfunction
 
 function RfParam getDefaultRfParam(); // 包能被感应到
     return RfParam{power: 31*32, mcs: 0};
+endfunction
+
+function MacStatus getEmptyMacStatus();
+    return MacStatus{backOffState: CSMA_IDLE, dcfState: DCF_IDLE};
 endfunction
 
 typedef struct {
@@ -287,6 +292,18 @@ function PhyEvent getEmptyPhyEvent();
         mpduDigest: getEmptyMpduDigest};
 endfunction
 
+function PhyStatus getEmptyPhyStatus();
+    return PhyStatus{
+        cca       : False, 
+        fcsEn     : False, 
+        fcsCorrect: False, 
+        txStart   : False, 
+        txEnd     : False, 
+        rxStart   : False, 
+        rxEnd     : False, 
+        state     : PHY_IDLE};
+endfunction
+
 typedef Server#(PhyEvent, GenericResp) PhySrv;
 typedef Client#(PhyEvent, GenericResp) PhyClt;
 
@@ -354,3 +371,182 @@ typedef struct {
     BridgeTag bridgeTag;
     UNDEFINED_PART undefinedPart;
 } CommonBridge_TOP deriving(Eq, Bits, Bounded, FShow);
+
+
+// // mac层交互接口结构体定义
+// // ================================================================
+// typedef enum {
+//     MOD_WRITE,
+//     MOD_READ
+// } RWMode deriving (Bits, Eq, Bounded, FShow);
+
+// typedef struct {
+//     RWMode rwMode;
+// } MACReqTag deriving(Eq, Bits, Bounded, FShow);
+
+// typedef struct {
+//     MACReqTag macReqTag;
+//     MacConfig macConfig;
+// } MacConfigReq deriving(Eq, Bits, Bounded, FShow);
+
+// typedef struct {
+//     MACReqTag macReqTag;
+// } MacStatusReq deriving(Eq, Bits, Bounded, FShow);
+
+// typedef struct {
+//     MacConfig macConfig;
+// } MacConfigRes deriving(Eq, Bits, Bounded, FShow);
+
+// typedef struct {
+//     DcfState dcfState;
+//     DcfNextTask dcfNextTask;
+// } MacStatusRes deriving(Eq, Bits, Bounded, FShow);
+
+// typedef Server#(MacConfigReq, MacConfigRes) MacConfigSrv;
+// typedef Client#(MacConfigReq, MacConfigRes) MacConfigClt;
+// typedef Server#(MacStatusReq, MacStatusRes) MacStatusSrv;
+// typedef Client#(MacStatusReq, MacStatusRes) MacStatusClt;
+
+// //MAC配置写入：写入为真值True，读取为False
+// function MacConfigReq getWriteMacConfigReq();
+//     return MacConfigReq{
+//         macReqTag: MACReqTag{rwMode: MOD_WRITE},
+//         macConfig: getDefaultMacCfg()
+//     };
+// endfunction
+// //MAC配置读取：写入为真值True，读取为False
+// function MacConfigReq getReadMacConfigReq();
+//     return MacConfigReq{
+//         macReqTag: MACReqTag{rwMode: MOD_READ},
+//         macConfig: getDefaultMacCfg()
+//     };
+// endfunction
+
+// function MacStatusReq getReadMacStatusReq();
+//     return MacStatusReq{
+//         macReqTag: MACReqTag{rwMode: MOD_READ}
+//     };
+// endfunction
+
+// function MacConfigRes getEmptyMacConfigResp();
+//     return MacConfigRes{
+//         macConfig: getDefaultMacCfg()
+//     };
+// endfunction
+
+// function MacStatusRes getEmptyMacStatusResp();
+//     return MacStatusRes{
+//         dcfState    : DCF_IDLE,
+//         dcfNextTask : NT_IDLE
+//     };
+// endfunction
+
+// // ================================================================
+// // phy层交互接口结构体定义
+// // ================================================================
+// typedef struct {
+//     RWMode rwMode;
+// } PhyReqTag deriving(Eq, Bits, Bounded, FShow);
+
+// typedef struct {
+//     PhyReqTag phyReqTag;
+// } PhyStatusReq deriving(Eq, Bits, Bounded, FShow);
+
+// typedef struct {
+//     PhyStatus phyStatus;
+// } PhyStatusRes deriving(Eq, Bits, Bounded, FShow);
+
+// function PhyStatusRes getEmptyPhyStatusResp();
+//     return PhyStatusRes{
+//         phyStatus    : getEmptyPhyStatus()
+//     };
+// endfunction
+
+// typedef Server#(PhyStatusReq, PhyStatusRes) PhyStatusSrv;
+// typedef Client#(PhyStatusReq, PhyStatusRes) PhyStatusClt;
+
+
+// ========================================= AXI-Lite Register Access Types ====================================
+
+typedef 9 REG_OFFSET_WIDTH;
+typedef Bit#(REG_OFFSET_WIDTH) RegOffset;
+
+// 寄存器访问请求/响应结构
+typedef struct {
+    Bool        writeEnable;  // True=写操作, False=读操作
+    RegOffset   regOffset;    // 寄存器偏移地址
+    Bit#(32)    writeData;    // 写数据
+} RegAccessReq deriving(Eq, Bits, FShow);
+
+typedef struct {
+    Bit#(32)    readData;     // 读数据
+    Bool        error;        // 访问错误标志
+} RegAccessResp deriving(Eq, Bits, FShow);
+
+// Client/Server接口定义
+typedef Client#(RegAccessReq, RegAccessResp) RegAccessClt;
+typedef Server#(RegAccessReq, RegAccessResp) RegAccessSrv;
+
+// ========================================= 地址空间常量定义 ====================================
+
+typedef 32 AXI_ADDR_WIDTH;
+typedef 32 AXI_DATA_WIDTH;
+
+Bit #(32) total_addr_min    = 'h_0000_0000;      // 0
+Bit #(32) total_addr_max    = 'h_001F_FFFF;      // 2 MB
+
+Bit #(32) adapter_addr_min  = 'h_0000_0000;      // 0
+Bit #(32) adapter_addr_max  = 'h_000F_FFFF;      // 1 MB
+
+Bit #(32) node_addr_min     = 'h_0010_0000;      // 1 MB
+Bit #(32) node_addr_max     = 'h_001F_FFFF;      // 2 MB
+
+Bit #(32) node_base_addr    = 'h_0010_0000;      // 节点空间起始地址
+Bit #(32) node_per_node     = 'h_0000_0400;      // 每节点 1KB
+Bit #(32) node_mac_offset   = 'h_0000_0000;      // MAC 起始偏移
+Bit #(32) node_phy_offset   = 'h_0000_0200;      // PHY 起始偏移 (512B)
+Bit #(32) node_mac_size     = 'h_0000_0200;      // 512B MAC
+Bit #(32) node_phy_size     = 'h_0000_0200;      // 512B PHY
+
+// ========================================= 节点分组参数 ====================================
+
+typedef 8   NODE_GROUP_COUNT;
+typedef 16  NODE_PER_GROUP;
+typedef 128 NODE_COUNT;
+
+// ========================================= MAC 寄存器偏移定义 ====================================
+
+// MAC 配置寄存器偏移 （可修改）
+Bit #(9) mac_slot_time_off      = 'h_000;    // Slot time
+Bit #(9) mac_sifs_off           = 'h_004;    // SIFS
+Bit #(9) mac_difs_off           = 'h_008;    // DIFS
+Bit #(9) mac_eifs_off           = 'h_00C;    // EIFS
+Bit #(9) mac_sig_time_off       = 'h_010;    // Signal time
+Bit #(9) mac_ofdm_symbol_off    = 'h_014;    // OFDM symbol time
+Bit #(9) mac_max_num_off        = 'h_018;    // Max num
+Bit #(9) mac_phy_delay_off      = 'h_01C;    // PHY delay
+Bit #(9) mac_timeout_off        = 'h_020;    // Timeout
+Bit #(9) mac_cw_min_off         = 'h_024;    // CW min
+Bit #(9) mac_cw_max_off         = 'h_028;    // CW max
+Bit #(9) mac_rts_thresh_off     = 'h_02C;    // RTS threshold
+Bit #(9) mac_retry_limit_off    = 'h_030;    // Retry limit
+Bit #(9) nav_en_h_off           = 'h_034;    // NAV enable
+Bit #(9) txop_en_h_off          = 'h_038;    // TXOP enable
+Bit #(9) filter_en_h_off        = 'h_03C;    // Filter enable
+
+// MAC 状态寄存器偏移 （仅查询）
+Bit #(9) mac_backoff_state_off  = 'h_040;    // Backoff state
+Bit #(9) mac_dcf_state_off      = 'h_044;    // DCF state
+Bit #(9) mac_fifoin_depth_off   = 'h_048;    // FIFO in depth
+Bit #(9) mac_fifoin_count_off   = 'h_04C;    // FIFO in count
+
+
+// ========================================= PHY 寄存器偏移定义 ====================================
+
+// PHY 状态寄存器偏移 (0x200 ~ 0x2FC) (仅查询)
+Bit #(9) phy_fsm_state_off          = 'h_200;    // FSM state
+Bit #(9) phy_cca_busy_off          = 'h_204;    // CCA busy
+Bit #(9) rx_power_dbm_off          = 'h_208;    // RX power (dBm)
+Bit #(9) fcs_en_h                  = 'h_20C;    // FCS enable
+Bit #(9) fcs_correct_h             = 'h_210;    // FCS correct
+
