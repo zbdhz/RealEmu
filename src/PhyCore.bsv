@@ -42,9 +42,11 @@ interface PhyCore;
     interface PhySrv phyRxSrv;
     interface PhyClt phyTxClt;
 
-    interface PhyStatusSrv phyStatusSrv;
+    // interface PhyStatusSrv phyStatusSrv;
     interface Get#(PhyStatus) getPhyStatus;
     // method PhyStatus getPhyStatus;
+    
+    interface RegAccessSrv phyRegSrv;
 endinterface
 
 ///============================= phyState =====================================
@@ -62,8 +64,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     FIFOF#(PhyEvent)    phyRxReqQ         <- mkFIFOF;
     FIFOF#(GenericResp) phyRxRespQ        <- mkFIFOF;
 
-    FIFOF#(PhyStatusReq) phyStatusReqQ     <- mkFIFOF;
-    FIFOF#(PhyStatusRes) phyStatusRespQ    <- mkFIFOF;
+    // FIFOF#(PhyStatusReq) phyStatusReqQ     <- mkFIFOF;
+    // FIFOF#(PhyStatusRes) phyStatusRespQ    <- mkFIFOF;
+    
+    // 寄存器访问接口
+    FIFOF#(RegAccessReq)  phyRegReqQ  <- mkFIFOF;
+    FIFOF#(RegAccessResp) phyRegRespQ <- mkFIFOF;
 
     `ifdef BSIM
         UInt#(32)  clkFreq      = 1;   //the clock freq (/MHz)
@@ -553,24 +559,58 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
               cycleCount <= cycleCount + 1;
     endrule
 
-    rule handlephyStatusReq;
-        if (phyStatusReqQ.notEmpty) begin
-            let req = phyStatusReqQ.first;
-            phyStatusReqQ.deq;
-            let resp = getEmptyPhyStatusResp();
-            let newPhyStatus = PhyStatus {
-                cca         : ccaBusyReg,
-                fcsEn       : rxEndReg,
-                fcsCorrect  : crcReg,
-                txStart     : txBeginReg,
-                txEnd       : txEndReg,
-                rxStart     : rxBeginReg,
-                rxEnd       : rxEndReg,
-                state       : stateReg
-            };
-            resp.phyStatus = newPhyStatus;
-            phyStatusRespQ.enq(resp);
-        end
+    // rule handlephyStatusReq;
+    //     if (phyStatusReqQ.notEmpty) begin
+    //         let req = phyStatusReqQ.first;
+    //         phyStatusReqQ.deq;
+    //         let resp = getEmptyPhyStatusResp();
+    //         let newPhyStatus = PhyStatus {
+    //             cca         : ccaBusyReg,
+    //             fcsEn       : rxEndReg,
+    //             fcsCorrect  : crcReg,
+    //             txStart     : txBeginReg,
+    //             txEnd       : txEndReg,
+    //             rxStart     : rxBeginReg,
+    //             rxEnd       : rxEndReg,
+    //             state       : stateReg
+    //         };
+    //         resp.phyStatus = newPhyStatus;
+    //         phyStatusRespQ.enq(resp);
+    //     end
+    // endrule
+
+    // 寄存器访问处理规则
+    rule handlePhyRegAccess;
+        let req = phyRegReqQ.first;
+        phyRegReqQ.deq;
+        RegAccessResp resp = RegAccessResp{readData: 0, error: False};
+        
+        // 寄存器访问逻辑
+        case (req.regOffset)
+            // PHY 状态寄存器 (仅查询)
+            phy_fsm_state_off: begin
+                resp.readData = zeroExtend(pack(stateReg));
+            end
+            phy_cca_busy_off: begin
+                resp.readData = zeroExtend(pack(ccaBusyReg));
+            end
+            rx_power_dbm_off: begin
+                resp.readData = zeroExtend(pack(rxPowerReg));
+            end
+            fcs_en_h: begin
+                resp.readData = zeroExtend(pack(rxEndReg));
+            end
+            fcs_correct_h: begin
+                resp.readData = zeroExtend(pack(crcReg));
+            end
+            
+            default: begin
+                resp.error = True;
+                $display("[PhyCore:%0d] Invalid register offset: 0x%03h", id, req.regOffset);
+            end
+        endcase
+        
+        phyRegRespQ.enq(resp);
     endrule
 
     //---------------------------
@@ -578,11 +618,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     //---------------------------
     interface lowMacTxSrv = toGPServer(lowMacTxReqQ, lowMacTxRespQ);
     interface lowMacRxClt = toGPClient(lowMacRxReqQ, lowMacRxRespQ);
+    interface phyRegSrv    = toGPServer(phyRegReqQ, phyRegRespQ);
 
     interface phyTxClt    = toGPClient(phyTxReqQ, phyTxRespQ);
     interface phyRxSrv    = toGPServer(phyRxReqQ, phyRxRespQ);
 
-    interface phyStatusSrv = toGPServer(phyStatusReqQ, phyStatusRespQ);
+    // interface phyStatusSrv = toGPServer(phyStatusReqQ, phyStatusRespQ);
 
     interface Get getPhyStatus;
         method ActionValue#(PhyStatus) get;

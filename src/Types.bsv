@@ -17,11 +17,17 @@
 // along with RealEmu.  If not, see <https://www.gnu.org/licenses/>.
 
 import ClientServer::*;
+import AxiStreamTypes::*;
+import Axi4LiteTypes::*;
 
 //----------------------------------------------------
 // treedepth = 2 
 typedef 4 NODE_NUM;
-typedef 2  GROUP_SIZE; 
+typedef 2 GROUP_SIZE; 
+
+//axi-lite分组
+typedef 2                                     NODE_PER_GROUP_LITE;
+typedef TDiv#(NODE_NUM, NODE_PER_GROUP_LITE)  NODE_GROUP_LITE;
 //----------------------------------------------------
 
 typedef 1024 MAX_DEV_NUM;
@@ -138,9 +144,9 @@ typedef enum{
 
 // DCF FSM Status
 typedef enum {
-    DCF_IDLE,
-    DCF_WAIT_BACKOFF,
-    DCF_RECV_CTSACK
+    DCF_IDLE          = 0,
+    DCF_WAIT_BACKOFF  = 1,
+    DCF_RECV_CTSACK   = 2
 } DcfState deriving (Bits, Eq, Bounded, FShow);
 
 typedef enum {
@@ -468,7 +474,7 @@ typedef struct {
 
 // ========================================= AXI-Lite Register Access Types ====================================
 
-typedef 9 REG_OFFSET_WIDTH;
+typedef 32 REG_OFFSET_WIDTH;
 typedef Bit#(REG_OFFSET_WIDTH) RegOffset;
 
 // 寄存器访问请求/响应结构
@@ -510,43 +516,53 @@ Bit #(32) node_phy_size     = 'h_0000_0200;      // 512B PHY
 
 // ========================================= 节点分组参数 ====================================
 
-typedef 8   NODE_GROUP_COUNT;
-typedef 16  NODE_PER_GROUP;
-typedef 128 NODE_COUNT;
+// typedef 8   NODE_GROUP_COUNT;
+// typedef 16  NODE_PER_GROUP;
+// typedef 128 NODE_COUNT;
 
 // ========================================= MAC 寄存器偏移定义 ====================================
 
 // MAC 配置寄存器偏移 （可修改）
-Bit #(9) mac_slot_time_off      = 'h_000;    // Slot time
-Bit #(9) mac_sifs_off           = 'h_004;    // SIFS
-Bit #(9) mac_difs_off           = 'h_008;    // DIFS
-Bit #(9) mac_eifs_off           = 'h_00C;    // EIFS
-Bit #(9) mac_sig_time_off       = 'h_010;    // Signal time
-Bit #(9) mac_ofdm_symbol_off    = 'h_014;    // OFDM symbol time
-Bit #(9) mac_max_num_off        = 'h_018;    // Max num
-Bit #(9) mac_phy_delay_off      = 'h_01C;    // PHY delay
-Bit #(9) mac_timeout_off        = 'h_020;    // Timeout
-Bit #(9) mac_cw_min_off         = 'h_024;    // CW min
-Bit #(9) mac_cw_max_off         = 'h_028;    // CW max
-Bit #(9) mac_rts_thresh_off     = 'h_02C;    // RTS threshold
-Bit #(9) mac_retry_limit_off    = 'h_030;    // Retry limit
-Bit #(9) nav_en_h_off           = 'h_034;    // NAV enable
-Bit #(9) txop_en_h_off          = 'h_038;    // TXOP enable
-Bit #(9) filter_en_h_off        = 'h_03C;    // Filter enable
+RegOffset mac_slot_time_off      = 'h_000;    // Slot time
+RegOffset mac_sifs_off           = 'h_004;    // SIFS
+RegOffset mac_difs_off           = 'h_008;    // DIFS
+RegOffset mac_eifs_off           = 'h_00C;    // EIFS
+RegOffset mac_sig_time_off       = 'h_010;    // Signal time
+RegOffset mac_ofdm_symbol_off    = 'h_014;    // OFDM symbol time
+RegOffset mac_max_num_off        = 'h_018;    // Max num
+RegOffset mac_phy_delay_off      = 'h_01C;    // PHY delay
+RegOffset mac_timeout_off        = 'h_020;    // Timeout
+RegOffset mac_cw_min_off         = 'h_024;    // CW min
+RegOffset mac_cw_max_off         = 'h_028;    // CW max
+RegOffset mac_rts_thresh_off     = 'h_02C;    // RTS threshold
+RegOffset mac_retry_limit_off    = 'h_030;    // Retry limit
+RegOffset nav_en_h_off           = 'h_034;    // NAV enable
+RegOffset txop_en_h_off          = 'h_038;    // TXOP enable
+RegOffset filter_en_h_off        = 'h_03C;    // Filter enable
 
 // MAC 状态寄存器偏移 （仅查询）
-Bit #(9) mac_backoff_state_off  = 'h_040;    // Backoff state
-Bit #(9) mac_dcf_state_off      = 'h_044;    // DCF state
-Bit #(9) mac_fifoin_depth_off   = 'h_048;    // FIFO in depth
-Bit #(9) mac_fifoin_count_off   = 'h_04C;    // FIFO in count
+RegOffset mac_backoff_state_off  = 'h_040;    // Backoff state
+RegOffset mac_dcf_state_off      = 'h_044;    // DCF state
+RegOffset mac_fifoin_depth_off   = 'h_048;    // FIFO in depth
+RegOffset mac_fifoin_count_off   = 'h_04C;    // FIFO in count
 
 
 // ========================================= PHY 寄存器偏移定义 ====================================
 
 // PHY 状态寄存器偏移 (0x200 ~ 0x2FC) (仅查询)
-Bit #(9) phy_fsm_state_off          = 'h_200;    // FSM state
-Bit #(9) phy_cca_busy_off          = 'h_204;    // CCA busy
-Bit #(9) rx_power_dbm_off          = 'h_208;    // RX power (dBm)
-Bit #(9) fcs_en_h                  = 'h_20C;    // FCS enable
-Bit #(9) fcs_correct_h             = 'h_210;    // FCS correct
+RegOffset phy_fsm_state_off         = 'h_200;    // FSM state
+RegOffset phy_cca_busy_off          = 'h_204;    // CCA busy
+RegOffset rx_power_dbm_off          = 'h_208;    // RX power (dBm)
+RegOffset fcs_en_h                  = 'h_20C;    // FCS enable
+RegOffset fcs_correct_h             = 'h_210;    // FCS correct
 
+// ========================================= AXI-Lite接口定义 ====================================
+typedef 512 DATA_WIDTH;
+typedef 8 BYTE_WIDTH;
+typedef 1  TUSER_WIDTH;
+typedef 32  CONFIG_WIDTH;
+typedef TDiv#(DATA_WIDTH, BYTE_WIDTH) KEEP_WIDTH;
+
+typedef RawAxiStreamMaster#(KEEP_WIDTH, TUSER_WIDTH) DmaAxiMaster;
+typedef RawAxiStreamSlave#(KEEP_WIDTH, TUSER_WIDTH)  DmaAxiSlave;
+typedef RawAxi4LiteSlave#(AXI_ADDR_WIDTH, TDiv#(AXI_DATA_WIDTH, BYTE_WIDTH)) DmaAxiLiteSlave;

@@ -38,10 +38,6 @@ interface MacCore;
     interface MacSrv lowMacRxSrv;
     interface MacClt lowMacTxClt;
 
-    // interface Put#(MacConfig) putmaccfg;
-    // interface Get#(MacConfig) getmaccfg;
-    // interface MacConfigSrv macConfigSrv;      // MAC配置服务器
-    // interface MacStatusSrv macStatusSrv;   
     interface RegAccessSrv macRegSrv;
 
     interface Put#(PhyStatus) phyStatus;
@@ -380,8 +376,8 @@ endmodule
 (* always_enabled = "phyStatus.put" *)
 // (* synthesize *)
 module mkMacDCF#(Integer id)(MacCore);
-    // FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
-    FIFOF#(MacEvent)    highMacTxReqQ  <- mkSizedFIFOF(MAC_FIFOIN_DEPTH);
+    FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
+    FIFOF#(MacEvent)    innerhighMacTxReqQ  <- mkSizedFIFOF(valueOf(MAC_FIFOIN_DEPTH));
     FIFOF#(GenericResp) highMacTxRespQ <- mkFIFOF;
     FIFOF#(MacEvent)    highMacRxReqQ  <- mkFIFOF;
     FIFOF#(GenericResp) highMacRxRespQ <- mkFIFOF;
@@ -392,10 +388,11 @@ module mkMacDCF#(Integer id)(MacCore);
     FIFOF#(GenericResp) lowMacRxRespQ  <- mkFIFOF;
 
     //新增配置查询和下发接口
-    FIFOF#(MacConfigReq)  macConfigReqQ   <- mkFIFOF;
-    FIFOF#(MacConfigRes)  macConfigRespQ  <- mkFIFOF;
-    FIFOF#(MacStatusReq)  macStatusReqQ   <- mkFIFOF;
-    FIFOF#(MacStatusRes)  macStatusRespQ  <- mkFIFOF;
+    FIFOF#(RegAccessReq)  macRegReqQ  <- mkFIFOF;
+    FIFOF#(RegAccessResp) macRegRespQ <- mkFIFOF;
+    //新增包队列控制
+    Reg#(UInt#(32))     mac_fifoin_count <- mkReg(0);
+    Wire#(Int#(8))      countDeltaWire <- mkDReg(0);
 
     FIFOF#(MacEvent)    lowMacRxYesToMEReqQ  <- mkLFIFOF;
     FIFOF#(MacEvent)    lowMacRxNotToMEReqQ  <- mkLFIFOF;
@@ -445,7 +442,18 @@ module mkMacDCF#(Integer id)(MacCore);
         lowMacRxRespQ.enq(GenericResp{});
     endrule
 
-    
+    (* descending_urgency = "txRegcopy, rxRegcopy" *)    
+    rule txRegcopy;
+        if(highMacTxReqQ.notEmpty && innerhighMacTxReqQ.notFull) begin
+            let txReq = highMacTxReqQ.first;
+            highMacTxReqQ.deq;
+            innerhighMacTxReqQ.enq(txReq);
+            if(countDeltaWire == 0) mac_fifoin_count <= mac_fifoin_count + 1;
+        end else begin
+            if(countDeltaWire < 0) mac_fifoin_count <= mac_fifoin_count - 1;
+        end
+    endrule
+
 
     rule updateNAV;
         if(lowMacRxNotToMEReqQ.notEmpty) begin
@@ -493,12 +501,12 @@ module mkMacDCF#(Integer id)(MacCore);
                 end
             end
             // highMac->lowMac发送队列非空，进入发送处理逻辑，可能需要发送Data或者RTS
-            else if (highMacTxReqQ.notEmpty) begin
+            else if (innerhighMacTxReqQ.notEmpty) begin
                 // if (backOffFsm.available) begin
                     if (nextTaskReg == NT_IDLE) begin
                     // 一次新的发送/重传
                         backOffFsm.start(tuple2(False, True)); //DIFS and expBackOff
-                        let txReq = highMacTxReqQ.first;
+                        let txReq = innerhighMacTxReqQ.first;
                         // 长帧使用RTS
                         if (txReq.mpduDigest.length > macCfgReg.rtsThreshold) begin
                             nextTask = NT_SEND_RTS;
@@ -530,9 +538,9 @@ module mkMacDCF#(Integer id)(MacCore);
         // endrule
 
         // 更新下发参考值
-        rule updateCtlFramPower(dcfStateReg == DCF_IDLE && highMacTxReqQ.notEmpty);
+        rule updateCtlFramPower(dcfStateReg == DCF_IDLE && innerhighMacTxReqQ.notEmpty);
             begin
-            lasthighMacTxReq <= highMacTxReqQ.first;
+            lasthighMacTxReq <= innerhighMacTxReqQ.first;
             // immLog("mkMacDcf", "updatepower", $format("Id %5d, update power:%d", id, lasthighMacTxReq.rfParam.power));
             end
         endrule
@@ -543,7 +551,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 case (nextTaskReg)
                 NT_SEND_RTS: begin
                     // 第一次BackOff，发送RTS帧
-                    let refFrame = highMacTxReqQ.first;
+                    let refFrame = innerhighMacTxReqQ.first;
                     let rtsFrame = setRtsFrame(refFrame);//隐藏条件，用refFrame中的NAV数值
                     lowMacTxReqQ.enq(rtsFrame);
                     dcfStateReg <= DCF_RECV_CTSACK;
@@ -565,8 +573,9 @@ module mkMacDCF#(Integer id)(MacCore);
                         else begin
                             retransCountReg <= 0;
                             backOffFsm.resetCW;  // 重置窗口
-                            highMacTxReqQ.deq;
-                            let txReq = highMacTxReqQ.first;
+                            innerhighMacTxReqQ.deq;
+                            countDeltaWire <= -1;
+                            let txReq = innerhighMacTxReqQ.first;
                             // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
                             txReq.status = False;
                             // highMacRxReqQ.enq(txReq);
@@ -574,7 +583,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     end
                     else begin
                     // 已经收到过CTS，或者无需RTS/CRS, 发送Data
-                        let refFrame = highMacTxReqQ.first;
+                        let refFrame = innerhighMacTxReqQ.first;
                         refFrame.mpduDigest.duration = macCfgReg.sifs+ fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(ACK_MPDU_TIME_us));//待完善 10： SIFS; 48: synctime;  20: acktime
                         lowMacTxReqQ.enq(refFrame);
                         dcfStateReg <= DCF_RECV_CTSACK;
@@ -672,7 +681,8 @@ module mkMacDCF#(Integer id)(MacCore);
                     backOffFsm.resetCW;  // 重置窗口
                     nextTask = NT_IDLE;
                     state = DCF_IDLE;
-                    highMacTxReqQ.deq;
+                    innerhighMacTxReqQ.deq;
+                    countDeltaWire <= -1;
                     highMacTxRespQ.enq(GenericResp{});
                     retransCountReg <= 0;
                 end
@@ -688,8 +698,9 @@ module mkMacDCF#(Integer id)(MacCore);
                     else begin
                         retransCountReg <= 0;
                         backOffFsm.resetCW;  // 重置窗口
-                        highMacTxReqQ.deq;
-                        let txReq = highMacTxReqQ.first;
+                        innerhighMacTxReqQ.deq;
+                        countDeltaWire <= -1;
+                        let txReq = innerhighMacTxReqQ.first;
                         txReq.status = False;
                     end
                 end
@@ -709,8 +720,9 @@ module mkMacDCF#(Integer id)(MacCore);
                     backOffFsm.resetCW;  // 重置窗口
                     state = DCF_IDLE;
                     nextTask = NT_IDLE;
-                    highMacTxReqQ.deq;
-                    let txReq = highMacTxReqQ.first;
+                    innerhighMacTxReqQ.deq;
+                    countDeltaWire <= -1;
+                    let txReq = innerhighMacTxReqQ.first;
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
                     txReq.status = False;
                     // highMacRxReqQ.enq(txReq);
@@ -721,35 +733,133 @@ module mkMacDCF#(Integer id)(MacCore);
             nextTaskReg <= nextTask;
         endrule
 
-    rule handlemacConfig;
-        if(macConfigReqQ.notEmpty) begin
-            let req = macConfigReqQ.first;
-            macConfigReqQ.deq;
-            case(req.macReqTag.rwMode)
-                MOD_WRITE: begin
-                    macCfgReg <= req.macConfig;
-                    let resp = getEmptyMacConfigResp();
-                    resp.macConfig = req.macConfig;
-                    macConfigRespQ.enq(resp);
-                end
-                MOD_READ: begin
-                    let resp = getEmptyMacConfigResp();
-                    resp.macConfig = macCfgReg;
-                    macConfigRespQ.enq(resp);
-                end
-            endcase
-        end
-    endrule
+    // rule handlemacConfig;
+    //     if(macConfigReqQ.notEmpty) begin
+    //         let req = macConfigReqQ.first;
+    //         macConfigReqQ.deq;
+    //         case(req.macReqTag.rwMode)
+    //             MOD_WRITE: begin
+    //                 macCfgReg <= req.macConfig;
+    //                 let resp = getEmptyMacConfigResp();
+    //                 resp.macConfig = req.macConfig;
+    //                 macConfigRespQ.enq(resp);
+    //             end
+    //             MOD_READ: begin
+    //                 let resp = getEmptyMacConfigResp();
+    //                 resp.macConfig = macCfgReg;
+    //                 macConfigRespQ.enq(resp);
+    //             end
+    //         endcase
+    //     end
+    // endrule
 
-    rule handlemacStatus;
-        if(macStatusReqQ.notEmpty) begin
-            let req = macStatusReqQ.first;
-            macStatusReqQ.deq;
-            let resp = getEmptyMacStatusResp();
-            resp.dcfState    = dcfStateReg;
-            resp.dcfNextTask = nextTaskReg;
-            macStatusRespQ.enq(resp);
-        end
+    // rule handlemacStatus;
+    //     if(macStatusReqQ.notEmpty) begin
+    //         let req = macStatusReqQ.first;
+    //         macStatusReqQ.deq;
+    //         let resp = getEmptyMacStatusResp();
+    //         resp.dcfState    = dcfStateReg;
+    //         resp.dcfNextTask = nextTaskReg;
+    //         macStatusRespQ.enq(resp);
+    //     end
+    // endrule
+
+    // 寄存器访问处理规则
+    (* descending_urgency = "handleMacRegAccess, dcfFsmIdle, dcfWaitBackOff, dcfRecvCtsAck" *)
+    rule handleMacRegAccess;
+        let req = macRegReqQ.first;
+        macRegReqQ.deq;
+        RegAccessResp resp = RegAccessResp{readData: 0, error: False};
+
+        // 寄存器访问逻辑
+        case (req.regOffset)
+            // MAC 配置寄存器 (可修改)
+            mac_slot_time_off: begin
+                if (req.writeEnable) macCfgReg.slot <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.slot);
+            end
+            mac_sifs_off: begin
+                if (req.writeEnable) macCfgReg.sifs <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.sifs);
+            end
+            mac_difs_off: begin
+                if (req.writeEnable) macCfgReg.difs <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.difs);
+            end
+            mac_eifs_off: begin
+                if (req.writeEnable) macCfgReg.eifs <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.eifs);
+            end
+            mac_sig_time_off: begin
+                if (req.writeEnable) macCfgReg.sigTime <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.sigTime);
+            end
+            mac_ofdm_symbol_off: begin
+                if (req.writeEnable) macCfgReg.ofdmSymbolTime <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.ofdmSymbolTime);
+            end
+            mac_max_num_off: begin
+                if (req.writeEnable) macCfgReg.maxNum <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.maxNum);
+            end
+            mac_phy_delay_off: begin
+                if (req.writeEnable) macCfgReg.phyDelayTime <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.phyDelayTime);
+            end
+            mac_timeout_off: begin
+                if (req.writeEnable) macCfgReg.timeout <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.timeout);
+            end
+            mac_cw_min_off: begin
+                if (req.writeEnable) macCfgReg.cwMin <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.cwMin);
+            end
+            mac_cw_max_off: begin
+                if (req.writeEnable) macCfgReg.cwMax <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.cwMax);
+            end
+            mac_rts_thresh_off: begin
+                if (req.writeEnable) macCfgReg.rtsThreshold <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.rtsThreshold);
+            end
+            mac_retry_limit_off: begin
+                if (req.writeEnable) macCfgReg.retryLimit <= truncate(req.writeData);
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.retryLimit);
+            end
+            nav_en_h_off: begin
+                if (req.writeEnable) macCfgReg.navEn <= unpack(truncate(req.writeData[0]));
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.navEn));
+            end
+            txop_en_h_off: begin
+                if (req.writeEnable) macCfgReg.txopEn <= unpack(truncate(req.writeData[0]));
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.txopEn));
+            end
+            filter_en_h_off: begin
+                if (req.writeEnable) macCfgReg.filterEn <= unpack(truncate(req.writeData[0]));
+                resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.filterEn));
+            end
+            
+            // MAC 状态寄存器 (仅查询)
+            mac_backoff_state_off: begin
+                resp.readData = zeroExtend(pack(macStaReg.backOffState));
+            end
+            mac_dcf_state_off: begin
+                resp.readData = zeroExtend(pack(dcfStateReg));
+            end
+            mac_fifoin_depth_off: begin
+                resp.readData = fromInteger(valueOf(MAC_FIFOIN_DEPTH));
+            end
+            mac_fifoin_count_off: begin
+                resp.readData = zeroExtend(pack(mac_fifoin_count));
+            end
+            
+            default: begin
+                resp.error = True;
+                $display("[MacCore:%0d] Invalid register offset: 0x%03h", id, req.regOffset);
+            end
+        endcase
+        
+        macRegRespQ.enq(resp);
     endrule
 
 
@@ -757,28 +867,15 @@ module mkMacDCF#(Integer id)(MacCore);
     interface highMacRxClt = toGPClient(highMacRxReqQ, highMacRxRespQ);
     interface lowMacTxClt  = toGPClient(lowMacTxReqQ, lowMacTxRespQ);
     interface lowMacRxSrv  = toGPServer(lowMacRxReqQ, lowMacRxRespQ);
-    interface macConfigSrv = toGPServer(macConfigReqQ, macConfigRespQ);
-    interface macStatusSrv = toGPServer(macStatusReqQ, macStatusRespQ);
+
+    interface macRegSrv    = toGPServer(macRegReqQ, macRegRespQ);
+
 
     interface Put phyStatus;
         method Action put(PhyStatus phyStatus);
             phyStatusWire <= phyStatus;
         endmethod
     endinterface
-
-    // interface Put putmaccfg;
-    //     method Action put(MacConfig cfg);
-    //         macCfgReg <= cfg;
-    //         backOffFsm.putmaccfg(cfg);
-    //     endmethod
-    // endinterface
-
-    // interface Get getmaccfg;
-    //     ActionValue#(MacConfig) get;
-    //         let cfg = macCfgReg;
-    //         return cfg;
-    //     endmethod
-    // endinterface
 
 
 endmodule

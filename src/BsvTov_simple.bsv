@@ -40,15 +40,7 @@ import CfgBridge::*;
 import Axi4LiteTypes::*;
 
 // typedef 32 NODE_NUM;
-typedef 512 DATA_WIDTH;
-typedef 8 BYTE_WIDTH;
-typedef TDiv#(DATA_WIDTH, BYTE_WIDTH) KEEP_WIDTH;
-typedef 1  TUSER_WIDTH;
-typedef 32  CONFIG_WIDTH;
 
-typedef RawAxiStreamMaster#(KEEP_WIDTH, TUSER_WIDTH) DmaAxiMaster;
-typedef RawAxiStreamSlave#(KEEP_WIDTH, TUSER_WIDTH)  DmaAxiSlave;
-typedef RawAxi4LiteSlave#(AXI_ADDR_WIDTH, TDiv#(AXI_DATA_WIDTH, BYTE_WIDTH)) DmaAxiLiteSlave;
 
 interface RawEmuCore;
     interface DmaAxiMaster dmaAxiMaster;

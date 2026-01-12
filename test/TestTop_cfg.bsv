@@ -54,6 +54,18 @@ function String intToString(Integer val);
     end
 endfunction
 
+// 辅助函数：创建带有参数的MacEvent
+function MacEvent createMacEventWithParams(MacId srcId, MacId dstId, UInt#(16) length, Int#(12) power, Mcs mcs);
+    MacEvent macEvent = getEmptyMacEvent;
+    macEvent.srcMacId = srcId;
+    macEvent.dstMacId = dstId;
+    macEvent.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
+    macEvent.mpduDigest.length = pack(length);
+    macEvent.rfParam.power = power;
+    macEvent.rfParam.mcs = mcs;
+    return macEvent;
+endfunction
+
 function Action printmaccfg(MacConfig cfg);
     action
         $display("MacConfig:");
@@ -167,157 +179,207 @@ module mkTestTop_cfg(Empty);
             let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
         endrule
 
-        // ==================== 发包规则 ====================
-        rule send if(logFile != InvalidFile && cycleCount % (100*1000) == 0);
-            let txReq = getEmptyMacEvent;
-            txReq.srcMacId = sendingNodes;
-            txReq.dstMacId = 0;
-            txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
-            //txReq.mpduDigest.length = 2048;
-            // txReq.rfParam.power = 60*32;//1920
-            txReq.rfParam.power = 40*32;//1280
-            txReq.mpduDigest.length = 1; //使长度变化，用于每次打印出不同的rxReq
-            txReq.rfParam.mcs = 0;
-            // macNodes[i].highMacTxSrv.request.put(txReq);
-            // macbridge.pcieTxSrv.request.put(txReq);
-            $display("Sent packet from %d to %d", txReq.srcMacId, txReq.dstMacId);
-            $fwrite(logFile, "[%8d ns] Sent packet from %0d to %0d\n",$time,  txReq.srcMacId, txReq.dstMacId);
-        endrule
+        // ==================== MAC配置测试 ====================
+        // 使用StmtFSM编写测试流程
+        Stmt testMacConfig = seq
+            // 等待初始化完成
+            while (!initialized) seq
+                $display("Waiting for initialization...");
+                delay(10);
+            endseq
+            
+            $display("\n=== Starting MAC Configuration Test ===");
+            
+            // 1. 读取重传次数参数
+            action
+                // 在action块中，使用let表达式创建并初始化结构体
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = mac_retry_limit_off;
+                req.writeData = 0;
+                macNodes[0].macRegSrv.request.put(req);
+                $display("[TEST] Reading retry limit...");
+            endaction
+            
+            // 2. 接收重传次数参数响应
+            action
+                RegAccessResp resp <- macNodes[0].macRegSrv.response.get;
+                $display("[TEST] Current retry limit: %0d", resp.readData);
+            endaction
+            
+            // 3. 修改重传次数参数
+            action
+                RegAccessReq req;
+                req.writeEnable = True;
+                req.regOffset = mac_retry_limit_off;
+                req.writeData = 5;  // 修改为重传5次
+                macNodes[0].macRegSrv.request.put(req);
+                $display("[TEST] Writing new retry limit: 5");
+            endaction
+            
+            // 4. 接收写操作响应
+            action
+                RegAccessResp resp <- macNodes[0].macRegSrv.response.get;
+                $display("[TEST] Write retry limit response received");
+            endaction
+            
+            // 5. 再次读取重传次数参数，验证修改是否成功
+            action
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = mac_retry_limit_off;
+                req.writeData = 0;
+                macNodes[0].macRegSrv.request.put(req);
+                $display("[TEST] Reading retry limit again...");
+            endaction
+            
+            // 6. 接收验证响应
+            action
+                RegAccessResp resp <- macNodes[0].macRegSrv.response.get;
+                $display("[TEST] New retry limit: %0d", resp.readData);
+                if (resp.readData == 5) begin
+                    $display("[TEST] PASS: Retry limit successfully changed!");
+                end else begin
+                    $display("[TEST] FAIL: Retry limit change failed!");
+                end
+            endaction
+            
+            // 7. 读取fifoin_count的值
+            action
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = mac_fifoin_count_off;
+                req.writeData = 0;
+                macNodes[1].macRegSrv.request.put(req);
+                $display("[TEST] Reading fifoin_count...");
+            endaction
+            
+            // 8. 接收fifoin_count响应
+            action
+                RegAccessResp resp <- macNodes[1].macRegSrv.response.get;
+                $display("[TEST] Current fifoin_count: %0d", resp.readData);
+            endaction
+            
+            // 9. 连续发送3个包
+            $display("[TEST] Sending 3 packets...");
+            // 使用Server接口的响应机制确保顺序执行
+            seq
+                // 发送第一个包
+                action
+                    let txReq = createMacEventWithParams(1, 0, 100, 40*32, 0);
+                    macbridge.pcieTxSrv.request.put(txReq);
+                    // macNodes[1].highMacTxSrv.request.put(txReq);
+                    $display("[TEST] Sent packet 1 from node 1 to node 0");
+                endaction
+                // action
+                //     let resp <- macNodes[1].highMacTxSrv.response.get;
+                //     $display("[TEST] Received response for packet 1");
+                // endaction
+                
+                // 发送第二个包
+                action
+                    let txReq = createMacEventWithParams(1, 0, 100, 40*32, 0);
+                    macbridge.pcieTxSrv.request.put(txReq);
+                    $display("[TEST] Sent packet 2 from node 1 to node 0");
+                endaction
+                // action
+                //     let resp <- macNodes[1].highMacTxSrv.response.get;
+                //     $display("[TEST] Received response for packet 2");
+                // endaction
+                
+                // 发送第三个包
+                action
+                    let txReq = createMacEventWithParams(1, 0, 100, 40*32, 0);
+                    macbridge.pcieTxSrv.request.put(txReq);
+                    $display("[TEST] Sent packet 3 from node 1 to node 0");
+                endaction
+                // action
+                //     let resp <- macNodes[1].highMacTxSrv.response.get;
+                //     $display("[TEST] Received response for packet 3");
+                // endaction
+            endseq
+            
+            // // 10. 等待包进入队列
+            delay(100000);
+            
+            // 11. 再次读取fifoin_count的值
+            action
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = mac_fifoin_count_off;
+                req.writeData = 0;
+                macNodes[1].macRegSrv.request.put(req);
+                $display("[TEST] Reading fifoin_count after sending packets...");
+            endaction
+            
+            // // 12. 接收fifoin_count响应并验证
+            action
+                RegAccessResp resp <- macNodes[1].macRegSrv.response.get;
+                $display("[TEST] New fifoin_count: %0d", resp.readData);
+                if (resp.readData > 0) begin
+                    $display("[TEST] PASS: Packets successfully added to FIFO!");
+                end else begin
+                    $display("[TEST] FAIL: No packets in FIFO!");
+                end
+            endaction
+            
+            $display("\n=== MAC Configuration Test Completed ===");
+            
+            // ==================== PHY 配置测试 ==================== 
+            $display("\n=== Starting PHY Configuration Test ===");
+            
+            // 1. 读取PHY FSM状态
+            action
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = phy_fsm_state_off;
+                req.writeData = 0;
+                phyNodes[1].phyRegSrv.request.put(req);
+                $display("[TEST] Reading PHY FSM state...");
+            endaction
+            
+            // 2. 接收PHY FSM状态响应
+            action
+                RegAccessResp resp <- phyNodes[1].phyRegSrv.response.get;
+                $display("[TEST] Current PHY FSM state: %0d", resp.readData);
+            endaction
+            
+            // 3. 读取PHY CCA忙状态
+            action
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = phy_cca_busy_off;
+                req.writeData = 0;
+                phyNodes[1].phyRegSrv.request.put(req);
+                $display("[TEST] Reading PHY CCA busy state...");
+            endaction
+            
+            // 4. 接收PHY CCA忙状态响应
+            action
+                RegAccessResp resp <- phyNodes[1].phyRegSrv.response.get;
+                $display("[TEST] Current PHY CCA busy state: %b", resp.readData[0]);
+            endaction
+            
+            // 5. 读取PHY RSSI (接收信号强度)
+            action
+                RegAccessReq req;
+                req.writeEnable = False;
+                req.regOffset = rx_power_dbm_off;
+                req.writeData = 0;
+                phyNodes[1].phyRegSrv.request.put(req);
+                $display("[TEST] Reading PHY RSSI...");
+            endaction
+            
+            // 6. 接收PHY RSSI响应
+            action
+                RegAccessResp resp <- phyNodes[1].phyRegSrv.response.get;
+                $display("[TEST] Current PHY RSSI: %d", unpack(pack(resp.readData)[11:0]));
+            endaction
+            
+            $display("\n=== PHY Configuration Test Completed ===");
+        endseq;
 
-        rule receive;
-            // let rxReq <- macNodes[0].highMacRxClt.request.get;
-            let rxReq <- macbridge.pcieRxClt.request.get;
-            $display("Received packet from %d, the power is %d", rxReq.srcMacId, rxReq.rfParam.power);
-            $fwrite(logFile,"[%8d ns] Received packet from %0d, the power is %0d\n", $time, rxReq.srcMacId, rxReq.rfParam.power);
-            totalReceived <= totalReceived + 1;
-        endrule
-
-        rule maccfgtest_req_read if(cycleCount % (100*1000) == 0);
-            let readreq = getReadMacConfigReq();
-            macNodes[0].macConfigSrv.request.put(readreq);
-            $display("maccfgtest_req, cyclecount: %d", cycleCount);
-        endrule
-
-        rule maccfgtest_req_write if(cycleCount % (1000*1000) == 999*1000);
-            let writereq = getWriteMacConfigReq();
-            writereq.macConfig.rtsThreshold = 200;
-            macNodes[0].macConfigSrv.request.put(writereq);
-            $display("maccfgtest_req, cyclecount: %d", cycleCount);
-        endrule
-
-        rule maccfgtest_resp;
-            let resp <- macNodes[0].macConfigSrv.response.get;
-            $display("maccfgtest_resp, cyclecount: %d", cycleCount);
-            printmaccfg(resp.macConfig);
-        endrule
-
-        rule logThroughput if((cycleCount % (1000*1000) == 0) && logFile != InvalidFile);
-            let throughput = pack(totalReceived);
-            // $fwrite(logFile, "%0d\n", throughput);
-            $fwrite(logFile, "================================\n[%8d ns] sendingNodes: %0d, totalReceived: %0d\n================================\n", $time, sendingNodes, throughput);
-
-            sendingNodes <= sendingNodes + 1; 
-        endrule
-
-        rule simEnd if(sendingNodes == fromInteger(valueOf(TEST_NODE_NUM)));
-            $display("end");
-            $finish();
-        endrule
+        // 运行测试流程
+        mkAutoFSM(testMacConfig);
 
 endmodule
-
-// module mkTestTop(Empty);
-//     // ==================== 节点实例化 ====================
-//         Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
-//         Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
-//         // Vector#(NODE_NUM, GainLossModel) channels <- replicateM(mkGainLossModelIdeal);
-//         Vector#(NODE_NUM, GainLossModel) channels;
-//         for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
-//             let fname = "bram_" + intToString(i) + ".txt";
-//             channels[i] <- mkGainLossModelLogDistance(fname);
-//         end
-
-//         ArbiterIFC pollController <- mkArbiter;
-
-//         Reg#(UInt#(10)) sendingNodes <- mkReg(1);     // 总接收包数
-//         // ==================== 控制寄存器 ====================
-//         Reg#(UInt#(64)) cycleCount <- mkReg(3);
-//         Reg#(UInt#(64)) totalReceived <- mkReg(0);     // 总接收包数
-//         Reg#(File) logFile <- mkReg(InvalidFile);     // 日志文件句柄
-
-//         // ==================== 初始化 ====================
-//         // rule printFilenamesOnce (cycleCount == 5);
-//         //     for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
-//         //         $display("Opening file: bram_%0d.txt", i);
-//         //     end
-//         // endrule
-
-//         rule initialize (cycleCount == 10);
-//             let fd <- $fopen("/home/emu/dev/RealEmu/scripts/throughout.txt", "w");
-//             logFile <= fd;
-//         endrule
-//         // ==================== 时钟计数 ====================
-//         rule updateclock;
-//             cycleCount <= cycleCount + 1;
-//         endrule
-
-//         // ==================== 节点连接 ====================
-//         for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
-//             mkConnection(macNodes[i].lowMacTxClt, phyNodes[i].lowMacTxSrv);
-//             mkConnection(macNodes[i].lowMacRxSrv, phyNodes[i].lowMacRxClt);
-//             mkConnection(phyNodes[i].phyTxClt, channels[i].phyTxSrv);
-//             mkConnection(phyNodes[i].phyRxSrv, channels[i].phyRxClt);
-//             mkConnection(pollController.phyTxMetaClt[i], channels[i].phyRxMetaSrv);
-//             mkConnection(pollController.phyRxMetaSrv[i], channels[i].phyTxMetaClt);
-//         end
-      
-//         rule updatePhyStatus;
-//             for (Integer i = 0; i < valueof(NODE_NUM); i = i + 1) begin
-//                 let phyStatus = phyNodes[i].getPhyStatus;
-//                 macNodes[i].phyStatus.put(phyStatus);
-//             end
-//         endrule
-
-//         for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
-//             rule handshake;
-//                 let resp <- macNodes[i].highMacTxSrv.response.get;
-//             endrule
-//         end
-//         // ==================== 发包规则 ====================
-//         for (UInt#(10) i = 1; i < fromInteger(valueOf(TEST_NODE_NUM)); i = i + 1)begin
-//             rule send if(i<=sendingNodes && logFile != InvalidFile);
-//                 let txReq = getEmptyMacEvent;
-//                 txReq.srcMacId = unpack(pack(i));
-//                 txReq.dstMacId = 0;
-//                 txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
-//                 //txReq.mpduDigest.length = 2048;
-//                 txReq.rfParam.power = 60*32;//1920
-//                 txReq.mpduDigest.length = 2048; //使长度变化，用于每次打印出不同的rxReq
-//                 txReq.rfParam.mcs = 7;
-//                 macNodes[i].highMacTxSrv.request.put(txReq);
-//                 $display("Sent packet from %d to %d", txReq.srcMacId, txReq.dstMacId);
-//                 $fwrite(logFile, "[%8d ns] Sent packet from %0d to %0d\n",$time,  txReq.srcMacId, txReq.dstMacId);
-//             endrule
-//         end
-
-//         rule receive;
-//             let rxReq <- macNodes[0].highMacRxClt.request.get;
-//             $display("Received packet from %d, the power is %d", rxReq.srcMacId, rxReq.rfParam.power);
-//             $fwrite(logFile,"[%8d ns] Received packet from %0d, the power is %0d\n", $time, rxReq.srcMacId, rxReq.rfParam.power);
-//             totalReceived <= totalReceived + 1;
-//         endrule
-
-//         rule logThroughput if((cycleCount % (1000*1000) == 0) && logFile != InvalidFile);
-//             let throughput = pack(totalReceived);
-//             // $fwrite(logFile, "%0d\n", throughput);
-//             $fwrite(logFile, "================================\n[%8d ns] sendingNodes: %0d, totalReceived: %0d\n================================\n", $time, sendingNodes, throughput);
-
-//             sendingNodes <= sendingNodes + 1; 
-//         endrule
-
-//         rule simEnd if(sendingNodes == fromInteger(valueOf(TEST_NODE_NUM)));
-//             $display("end");
-//             $finish();
-//         endrule
-
-// endmodule

@@ -21,11 +21,11 @@ include ../Makefile.base
 # TESTFILE ?= TestPhySinrStats.bsv
 # TOPMODULE ?= mkTestPhySinrStats
 
-# TESTFILE ?= TestTop_cfg.bsv
-# TOPMODULE ?= mkTestTop_cfg
+TESTFILE ?= TestTop_cfg.bsv
+TOPMODULE ?= mkTestTop_cfg
 
-TESTFILE ?= Param_test.bsv
-TOPMODULE ?= mkTestParameter
+# TESTFILE ?= Param_test.bsv
+# TOPMODULE ?= mkTestParameter
 
 # TESTFILE ?= TestMacBridge.bsv
 # TOPMODULE ?= mkTestMacBridge
