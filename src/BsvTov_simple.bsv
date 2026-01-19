@@ -38,6 +38,7 @@ import Arbitration::*;
 import MacBridge::*;
 import CfgBridge::*;
 import Axi4LiteTypes::*;
+import CfgAxiLite::*;
 
 // typedef 32 NODE_NUM;
 
@@ -56,6 +57,7 @@ module mkRawEmuCore(RawEmuCore);
 
     interface dmaAxiMaster = axiMasterIfc;
     interface dmaAxiSlave = axiSlaveIfc;
+    interface dmaAxiLiteSlave = core.dmaAxiLiteSlave;
 endmodule
 
 interface EmuCore;
@@ -78,9 +80,10 @@ module mkEmuCore(EmuCore);
     Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
     Vector#(NODE_NUM, GainLossModel_Ctrl) channels <- replicateM(mkGainLossModelLogDistance);
 
-    MacBridgeIFC macbridge <- mkMacBridge;
-    CfgBridgeIFC cfgbridge <- mkCfgBridge;
-    ArbiterIFC pollController <- mkArbiter;
+    MacBridgeIFC macbridge                    <- mkMacBridge;
+    CfgBridgeIFC cfgbridge                    <- mkCfgBridge;
+    ArbiterIFC pollController                 <- mkArbiter;
+    NodeControlManager_IFC axilitenodemanager <- mkAxiLiteNodeControlManager;
 
     // ====================   节点连接   ====================
     for(Integer i=0; i<valueOf(NODE_NUM); i=i+1) begin
@@ -95,11 +98,13 @@ module mkEmuCore(EmuCore);
         mkConnection(macbridge.macRxSrv[i], macNodes[i].highMacRxClt);
         
         mkConnection(cfgbridge.chanTxClt[i], channels[i].chanTxSrv);
+        mkConnection(axilitenodemanager.macRegClients[i], macNodes[i].macRegSrv);
+        mkConnection(axilitenodemanager.phyRegClients[i], phyNodes[i].phyRegSrv);
     end
 
     rule updatePhyStatus;
         for (Integer i = 0; i < valueof(NODE_NUM); i = i + 1) begin
-            let phyStatus = phyNodes[i].getPhyStatus;
+            let phyStatus <- phyNodes[i].getPhyStatus.get();
             macNodes[i].phyStatus.put(phyStatus);
         end
     endrule
@@ -157,6 +162,7 @@ module mkEmuCore(EmuCore);
         let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
     endrule
 
+    interface dmaAxiLiteSlave = axilitenodemanager.axiLiteSlave;
     interface rx = toGet(bridge2AxiFifo);  // 绑定发送接口
     interface tx = toPut(axi2BridgeFifo);  // 绑定接收接口
 endmodule

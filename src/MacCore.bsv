@@ -459,9 +459,11 @@ module mkMacDCF#(Integer id)(MacCore);
         if(lowMacRxNotToMEReqQ.notEmpty) begin
             let rxReq = lowMacRxNotToMEReqQ.first;
             // if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)|| isDataFrame(rxReq.mpduDigest)) begin
-            if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)) begin
-                backOffFsm.navctrl.handleFrame(rxReq);       //新增nav逻辑
-                $display("[%8d ns] update nav in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
+            if (macCfgReg.navEn == True) begin
+                if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)) begin
+                    backOffFsm.navctrl.handleFrame(rxReq);       //新增nav逻辑
+                    $display("[%8d ns] update nav in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
+                end
             end
             lowMacRxNotToMEReqQ.deq;
         end
@@ -829,6 +831,7 @@ module mkMacDCF#(Integer id)(MacCore);
             nav_en_h_off: begin
                 if (req.writeEnable) macCfgReg.navEn <= unpack(truncate(req.writeData[0]));
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.navEn));
+                $display("wawawa update nav, myid is %d", id);
             end
             txop_en_h_off: begin
                 if (req.writeEnable) macCfgReg.txopEn <= unpack(truncate(req.writeData[0]));

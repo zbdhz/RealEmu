@@ -22,11 +22,11 @@ import Axi4LiteTypes::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 4 NODE_NUM;
-typedef 2 GROUP_SIZE; 
+typedef 16 NODE_NUM;
+typedef 4 GROUP_SIZE; 
 
 //axi-lite分组
-typedef 2                                     NODE_PER_GROUP_LITE;
+typedef 4                                     NODE_PER_GROUP_LITE;
 typedef TDiv#(NODE_NUM, NODE_PER_GROUP_LITE)  NODE_GROUP_LITE;
 //----------------------------------------------------
 
@@ -497,6 +497,11 @@ typedef Server#(RegAccessReq, RegAccessResp) RegAccessSrv;
 
 typedef 32 AXI_ADDR_WIDTH;
 typedef 32 AXI_DATA_WIDTH;
+typedef 2  AXI4_RESP_WIDTH;
+// AXI4-Lite响应代码定义
+Axi4LiteWrResp axi4_lite_okay = 2'b00;
+Axi4LiteWrResp axi4_lite_slverr = 2'b10;
+
 
 Bit #(32) total_addr_min    = 'h_0000_0000;      // 0
 Bit #(32) total_addr_max    = 'h_001F_FFFF;      // 2 MB
@@ -507,8 +512,12 @@ Bit #(32) adapter_addr_max  = 'h_000F_FFFF;      // 1 MB
 Bit #(32) node_addr_min     = 'h_0010_0000;      // 1 MB
 Bit #(32) node_addr_max     = 'h_001F_FFFF;      // 2 MB
 
+// 节点地址空间大小类型定义
+typedef 1024 NODE_ADDR_SIZE;                // 每节点1KB
+typedef TLog#(NODE_ADDR_SIZE) NODE_ADDR_BITS; // 地址空间对应的二进制位数
+
 Bit #(32) node_base_addr    = 'h_0010_0000;      // 节点空间起始地址
-Bit #(32) node_per_node     = 'h_0000_0400;      // 每节点 1KB
+Bit #(32) node_per_node     = fromInteger(valueOf(NODE_ADDR_SIZE));      // 每节点 1KB
 Bit #(32) node_mac_offset   = 'h_0000_0000;      // MAC 起始偏移
 Bit #(32) node_phy_offset   = 'h_0000_0200;      // PHY 起始偏移 (512B)
 Bit #(32) node_mac_size     = 'h_0000_0200;      // 512B MAC
@@ -556,12 +565,13 @@ RegOffset rx_power_dbm_off          = 'h_208;    // RX power (dBm)
 RegOffset fcs_en_h                  = 'h_20C;    // FCS enable
 RegOffset fcs_correct_h             = 'h_210;    // FCS correct
 
-// ========================================= AXI-Lite接口定义 ====================================
+// ========================================= AXI接口定义 ====================================
 typedef 512 DATA_WIDTH;
 typedef 8 BYTE_WIDTH;
 typedef 1  TUSER_WIDTH;
 typedef 32  CONFIG_WIDTH;
 typedef TDiv#(DATA_WIDTH, BYTE_WIDTH) KEEP_WIDTH;
+
 
 typedef RawAxiStreamMaster#(KEEP_WIDTH, TUSER_WIDTH) DmaAxiMaster;
 typedef RawAxiStreamSlave#(KEEP_WIDTH, TUSER_WIDTH)  DmaAxiSlave;

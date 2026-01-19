@@ -9,8 +9,8 @@ include ../Makefile.base
 # TESTFILE ?= TestBsvTop.bsv 
 # TOPMODULE ?= mkTestRawEmuCore
 
-# TESTFILE ?= TestBsvTop.bsv 
-# TOPMODULE ?= mkTestRawEmuCore
+TESTFILE ?= TestTop_axil_ite.bsv 
+TOPMODULE ?= mkTestRawEmuCore
 
 # TESTFILE ?= TestBsvTop_collision.bsv 
 # TOPMODULE ?= mkTestRawEmuCore_collision
@@ -21,8 +21,8 @@ include ../Makefile.base
 # TESTFILE ?= TestPhySinrStats.bsv
 # TOPMODULE ?= mkTestPhySinrStats
 
-TESTFILE ?= TestTop_cfg.bsv
-TOPMODULE ?= mkTestTop_cfg
+# TESTFILE ?= TestTop_cfg.bsv
+# TOPMODULE ?= mkTestTop_cfg
 
 # TESTFILE ?= Param_test.bsv
 # TOPMODULE ?= mkTestParameter

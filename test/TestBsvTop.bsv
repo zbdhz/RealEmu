@@ -19,8 +19,8 @@ import Channel::*;
 import Arbitration::*;
 import MacBridge::*;
 import CfgBridge::*;
-import BsvTop::*;
-// import BsvTov_simple::*;
+// import BsvTop::*;
+import BsvTov_simple::*;
 
 typedef 16 TEST_NODE_NUM;
 function String digitToChar(Integer d);
