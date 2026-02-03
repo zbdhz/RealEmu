@@ -22,11 +22,11 @@ import Axi4LiteTypes::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 16 NODE_NUM;
-typedef 4 GROUP_SIZE; 
+typedef 64 NODE_NUM;
+typedef 8 GROUP_SIZE; 
 
 //axi-lite分组
-typedef 4                                     NODE_PER_GROUP_LITE;
+typedef 8                                     NODE_PER_GROUP_LITE;
 typedef TDiv#(NODE_NUM, NODE_PER_GROUP_LITE)  NODE_GROUP_LITE;
 //----------------------------------------------------
 
@@ -342,6 +342,28 @@ endfunction
 typedef Server#(ChannelCfg, GenericResp) ChanSrv;
 typedef Client#(ChannelCfg, GenericResp) ChanClt;
 
+//======================================== PerTable Types ====================================
+typedef 14 PER_IN_WITDH;
+typedef 16 PER_OUT_WITDH;
+
+typedef UInt#(PER_IN_WITDH)  PerIn;
+typedef UInt#(PER_OUT_WITDH) PerOut;
+
+typedef struct {
+    PerIn perIn;
+    PerOut perOut;
+}PerCfg deriving(Eq, Bits, Bounded, FShow);
+
+function PerCfg getEmptyPerCfg();
+    return PerCfg{
+        perIn   : 0, 
+        perOut  : 1};
+endfunction
+
+typedef Server#(PerCfg, GenericResp) PerSrv;
+typedef Client#(PerCfg, GenericResp) PerClt;
+
+
 // ======================================== Bridge Types ====================================
 
 typedef 1 CONTROL_FLAG_WIDTH;
@@ -378,99 +400,10 @@ typedef struct {
     UNDEFINED_PART undefinedPart;
 } CommonBridge_TOP deriving(Eq, Bits, Bounded, FShow);
 
-
-// // mac层交互接口结构体定义
-// // ================================================================
-// typedef enum {
-//     MOD_WRITE,
-//     MOD_READ
-// } RWMode deriving (Bits, Eq, Bounded, FShow);
-
-// typedef struct {
-//     RWMode rwMode;
-// } MACReqTag deriving(Eq, Bits, Bounded, FShow);
-
-// typedef struct {
-//     MACReqTag macReqTag;
-//     MacConfig macConfig;
-// } MacConfigReq deriving(Eq, Bits, Bounded, FShow);
-
-// typedef struct {
-//     MACReqTag macReqTag;
-// } MacStatusReq deriving(Eq, Bits, Bounded, FShow);
-
-// typedef struct {
-//     MacConfig macConfig;
-// } MacConfigRes deriving(Eq, Bits, Bounded, FShow);
-
-// typedef struct {
-//     DcfState dcfState;
-//     DcfNextTask dcfNextTask;
-// } MacStatusRes deriving(Eq, Bits, Bounded, FShow);
-
-// typedef Server#(MacConfigReq, MacConfigRes) MacConfigSrv;
-// typedef Client#(MacConfigReq, MacConfigRes) MacConfigClt;
-// typedef Server#(MacStatusReq, MacStatusRes) MacStatusSrv;
-// typedef Client#(MacStatusReq, MacStatusRes) MacStatusClt;
-
-// //MAC配置写入：写入为真值True，读取为False
-// function MacConfigReq getWriteMacConfigReq();
-//     return MacConfigReq{
-//         macReqTag: MACReqTag{rwMode: MOD_WRITE},
-//         macConfig: getDefaultMacCfg()
-//     };
-// endfunction
-// //MAC配置读取：写入为真值True，读取为False
-// function MacConfigReq getReadMacConfigReq();
-//     return MacConfigReq{
-//         macReqTag: MACReqTag{rwMode: MOD_READ},
-//         macConfig: getDefaultMacCfg()
-//     };
-// endfunction
-
-// function MacStatusReq getReadMacStatusReq();
-//     return MacStatusReq{
-//         macReqTag: MACReqTag{rwMode: MOD_READ}
-//     };
-// endfunction
-
-// function MacConfigRes getEmptyMacConfigResp();
-//     return MacConfigRes{
-//         macConfig: getDefaultMacCfg()
-//     };
-// endfunction
-
-// function MacStatusRes getEmptyMacStatusResp();
-//     return MacStatusRes{
-//         dcfState    : DCF_IDLE,
-//         dcfNextTask : NT_IDLE
-//     };
-// endfunction
-
-// // ================================================================
-// // phy层交互接口结构体定义
-// // ================================================================
-// typedef struct {
-//     RWMode rwMode;
-// } PhyReqTag deriving(Eq, Bits, Bounded, FShow);
-
-// typedef struct {
-//     PhyReqTag phyReqTag;
-// } PhyStatusReq deriving(Eq, Bits, Bounded, FShow);
-
-// typedef struct {
-//     PhyStatus phyStatus;
-// } PhyStatusRes deriving(Eq, Bits, Bounded, FShow);
-
-// function PhyStatusRes getEmptyPhyStatusResp();
-//     return PhyStatusRes{
-//         phyStatus    : getEmptyPhyStatus()
-//     };
-// endfunction
-
-// typedef Server#(PhyStatusReq, PhyStatusRes) PhyStatusSrv;
-// typedef Client#(PhyStatusReq, PhyStatusRes) PhyStatusClt;
-
+typedef struct {
+    PerCfg perCfg;
+    BridgeTag bridgeTag;//调换控制帧的位置，确保数据面的对齐
+} CfgBridge_TOP_Per deriving(Eq, Bits, Bounded, FShow);
 
 // ========================================= AXI-Lite Register Access Types ====================================
 

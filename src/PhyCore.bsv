@@ -26,6 +26,7 @@ import ClientServer::*;
 import DReg::*;
 import BUtils ::*;
 import RegFile::*;
+import BRAM::*;
 
 import LFSR::*;
 import Divide::*;
@@ -41,6 +42,8 @@ interface PhyCore;
 
     interface PhySrv phyRxSrv;
     interface PhyClt phyTxClt;
+
+    interface PerSrv perSrv;
 
     // interface PhyStatusSrv phyStatusSrv;
     interface Get#(PhyStatus) getPhyStatus;
@@ -70,6 +73,10 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     // 寄存器访问接口
     FIFOF#(RegAccessReq)  phyRegReqQ  <- mkFIFOF;
     FIFOF#(RegAccessResp) phyRegRespQ <- mkFIFOF;
+
+    //Per曲线动态加载访问接口
+    FIFOF#(PerCfg)      perTxReqQ   <- mkFIFOF;
+    FIFOF#(GenericResp) perTxRespQ  <- mkFIFOF;
 
     `ifdef BSIM
         UInt#(32)  clkFreq      = 1;   //the clock freq (/MHz)
@@ -378,12 +385,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                     if(perWire >= unpack(randomValueReg))begin
                         crcReg <= True;
                         // if(id==0 || id == 1)
-                            // $display("%0d CRC OK",id);
+                            $display("%0d CRC OK",id);
                         //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, CRC OK", id));
                     end else begin
                         crcReg <= False;
                         // if(id==0 || id == 1)
-                            // $display("%d CRC ERROR",id);
+                            $display("%d CRC ERROR",id);
                         immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, CRC Error", id));
                     end
                 end
@@ -436,7 +443,19 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     // ROM
     //---------------------------
     Rom1port#(UInt#(12),UInt#(32)) rom1 <- mkSingleRom("Lg.mem");
-    Rom1port#(UInt#(14),UInt#(16)) rom2 <- mkSingleRom("Per.mem");
+
+    // Rom1port#(UInt#(14),UInt#(16)) rom2 <- mkSingleRom("Per.mem");
+    //     //ram的外部定义，需要暴露另一端口给DMA配置  d:10
+    BRAM2Port#(PerIn, PerOut) perRam <- mkBRAM2Server(
+        // defaultValue
+        BRAM_Configure {                            
+            memorySize   : 16383,
+            loadFormat   : tagged Hex "Per.mem",
+            latency      : 2,
+            outFIFODepth : 4,
+            allowWriteResponseBypass : False
+        }
+    );
 
     //功率值查表映射（Q6.5定点数）
     rule putAddr1 if ((stateReg == PHY_SYNC || stateReg == PHY_RX) && rxValidReg);
@@ -463,7 +482,14 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         else begin
             addr2 = zeroExtend(sinrAddr);
         end
-        rom2.request.put(addr2);
+        // rom2.request.put(addr2);
+        let bramReq = BRAMRequest{             
+            write: False,          
+            responseOnWrite: False,  
+            address:  addr2,            
+            datain: 0             
+        };
+        perRam.portB.request.put(bramReq);
         // if(id==0 || id == 1)
             // $display("id: %d, addr2: %d, sinrAddr: %d, currentMcsReg: %d",id, addr2,sinrAddr,currentMcsReg);
 
@@ -486,7 +512,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     // endrule
 
     rule let1;
-        let tmpPer <- rom2.response.get;
+        // let tmpPer <- rom2.response.get;
+        let tmpPer <- perRam.portB.response.get;
         perWire <= tmpPer;
         perValidWire <= True;
         // if(stateReg == PHY_RX)begin
@@ -494,7 +521,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         //     $fwrite(fd, "%0d\n", tmpPer);  // 写入数据并换行
         // end
         // $display("PER: %0d ", tmpPer);
-        // immLog("mkPhyYansWifi", "let1", $format("Id %5d, PER: %0d", id, tmpPer));
+        immLog("mkPhyYansWifi", "let1", $format("Id %5d, PER: %0d", id, tmpPer));
     endrule
 
 
@@ -613,12 +640,27 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         phyRegRespQ.enq(resp);
     endrule
 
+
+    //更新per配置
+    rule updatePerCfg;
+        let perCfg = perTxReqQ.first;
+        perTxReqQ.deq;
+        perTxRespQ.enq(GenericResp{});
+        let bramReq = BRAMRequest {
+                write: True,
+                responseOnWrite: False,
+                address: perCfg.perIn,
+                datain: perCfg.perOut
+            };
+        perRam.portA.request.put(bramReq);
+    endrule
     //---------------------------
     // interface method
     //---------------------------
     interface lowMacTxSrv = toGPServer(lowMacTxReqQ, lowMacTxRespQ);
     interface lowMacRxClt = toGPClient(lowMacRxReqQ, lowMacRxRespQ);
-    interface phyRegSrv    = toGPServer(phyRegReqQ, phyRegRespQ);
+    interface phyRegSrv   = toGPServer(phyRegReqQ, phyRegRespQ);
+    interface perSrv      = toGPServer(perTxReqQ, perTxRespQ);
 
     interface phyTxClt    = toGPClient(phyTxReqQ, phyTxRespQ);
     interface phyRxSrv    = toGPServer(phyRxReqQ, phyRxRespQ);

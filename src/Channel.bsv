@@ -125,7 +125,7 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
     BRAM2Port#(Bit#(DEV_ID_WIDTH), NodeDistance) distanceRam2 <- mkBRAM2Server(
         // defaultValue
         BRAM_Configure {                            
-            memorySize   : 0,                       
+            memorySize   : 1024,                       
             loadFormat   : tagged Hex "bram_one.txt",
             // loadFormat   : tagged Hex filename_location,      
             latency      : 2,                          

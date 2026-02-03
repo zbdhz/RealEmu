@@ -91,7 +91,7 @@ module mkTestRawEmuCore(Empty);
     // 计时器
     Reg#(UInt#(32)) timer <- mkReg(0);
     // 超时时间（单位：时钟周期）
-    UInt#(32) timeoutCycles = 1000000;
+    UInt#(32) timeoutCycles = 5000000;
 
     //发包计数
     Reg#(UInt#(32)) sendCount <- mkReg(0);
@@ -164,7 +164,7 @@ module mkTestRawEmuCore(Empty);
                     $display("[AXI-Lite Test] Phase 0: Initiating read request...");
                     $display("[AXI-Lite Test] Read Address: 0x%h, Valid: %b", node_base_addr, True);
                     arValid <= True;
-                    arAddr <= node_base_addr + node_per_node * 4 + mac_ofdm_symbol_off;
+                    arAddr <= node_base_addr + node_per_node * 1 + mac_ofdm_symbol_off;
                     testPhase <= 1;
                 end
                 1: begin // 等待读地址确认
@@ -310,6 +310,7 @@ module mkTestRawEmuCore(Empty);
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
         txReq.mpduDigest.length = 1490;  // 数据包长度
         txReq.rfParam.power = 60*32;//1920
+        // txReq.rfParam.power = 0;//1920
         txReq.rfParam.mcs = 0;
         txReq.mpduDigest.duration = 2164;
         // 创建AXI Stream数据包

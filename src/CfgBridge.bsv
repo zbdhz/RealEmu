@@ -32,10 +32,11 @@ import Types::*;
 
 interface CfgBridgeIFC;
 
-    interface ChanSrv chanTxSrv; // 下行
+    interface ChanSrv chanTxSrv; // 下行通道(channelcfg)
+    interface PerSrv  perTxSrv;// 下行通道 (percfg)
 
     interface Vector#(NODE_NUM, ChanClt)  chanTxClt;  // 连接所有节点的 highMacTxSrv (下行发包)
-
+    interface Vector#(NODE_NUM, PerClt)   perTxClt; // 连接所有节点phy层的per配置通道
 endinterface
 
 
@@ -46,7 +47,13 @@ module mkCfgBridge(CfgBridgeIFC);
     FIFOF#(GenericResp)                         pcieTxRespQ  <- mkFIFOF;
     Vector#(NODE_NUM, FIFOF#(ChannelCfg))       qChanTxReqQ   <- replicateM(mkFIFOF);
     Vector#(NODE_NUM, FIFOF#(GenericResp))      qChanTxRespQ  <- replicateM(mkFIFOF);
-    //
+    
+    FIFOF#(PerCfg)                          pcieTxPerReqQ   <- mkFIFOF;
+    FIFOF#(GenericResp)                     pcieTxPerRespQ  <- mkFIFOF;
+    Vector#(NODE_NUM, FIFOF#(PerCfg))       qPerTxReqQ   <- replicateM(mkFIFOF);
+    Vector#(NODE_NUM, FIFOF#(GenericResp))  qPerTxRespQ  <- replicateM(mkFIFOF);
+
+    //======================================== channel ====================================
     Reg#(Tuple2#(Bool, ChannelCfg)) deMuxReg2 <- mkDReg(tuple2(False, getEmptyChannelCfg));
     Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs2 <- replicateM(mkDReg(False));
     Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(ChannelCfg)) eventRegs2 <- replicateM(mkDReg(getEmptyChannelCfg));
@@ -87,6 +94,46 @@ module mkCfgBridge(CfgBridgeIFC);
             qChanTxRespQ[i].deq;
         endrule
     end
+    //======================================== per ====================================
+    Reg#(Tuple2#(Bool, PerCfg)) deMuxReg3 <- mkDReg(tuple2(False, getEmptyPerCfg));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs3 <- replicateM(mkDReg(False));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(PerCfg)) eventRegs3 <- replicateM(mkDReg(getEmptyPerCfg));
+    // Level 1 MUX（1节点→32组，粗略广播）
+    rule txProcessPer;
+        let txReq = pcieTxPerReqQ.first;
+        pcieTxPerReqQ.deq;
+        pcieTxPerRespQ.enq(GenericResp{});
+        deMuxReg3 <= tuple2(True, txReq);
+    endrule
+
+    rule txBroadcastPer;
+        let {valid, txPerCfg} = deMuxReg3;
+        // 上游信号广播到各组
+        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
+            validRegs3[g] <= valid;
+            eventRegs3[g] <= txPerCfg;
+        end
+    endrule
+
+    // Level 2 MUX（各组父节点→子节点，精准匹配）
+    rule txSendPer;
+        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
+            for (Integer gr = 0; gr < valueOf(GROUP_SIZE); gr = gr + 1) begin
+                let index = g*valueOf(GROUP_SIZE) + gr;
+                let valid = validRegs3[g];
+                let txPerCfg = eventRegs3[g];
+                if (valid) begin
+                    qPerTxReqQ[index].enq(txPerCfg);
+                end
+            end
+        end
+    endrule
+
+    for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1)begin
+        rule handshakePerTx;
+            qPerTxRespQ[i].deq;
+        endrule
+    end
 
     //接口实现
     Vector#(NODE_NUM, ChanClt)  qchanTxClt;
@@ -95,8 +142,15 @@ module mkCfgBridge(CfgBridgeIFC);
         qchanTxClt[i] = toGPClient(qChanTxReqQ[i], qChanTxRespQ[i]);
     end
 
-    interface chanTxSrv = toGPServer(pcieTxReqQ, pcieTxRespQ);//上游
+    Vector#(NODE_NUM, PerClt)  qperTxClt;
 
+    for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+        qperTxClt[i] = toGPClient(qPerTxReqQ[i], qPerTxRespQ[i]);
+    end
+
+    interface chanTxSrv = toGPServer(pcieTxReqQ, pcieTxRespQ);//上游channel
+    interface perTxSrv  = toGPServer(pcieTxPerReqQ, pcieTxPerRespQ);//上游Per
     interface chanTxClt = qchanTxClt;//下游
+    interface perTxClt = qperTxClt;//下游
 
 endmodule

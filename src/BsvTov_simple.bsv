@@ -75,6 +75,7 @@ module mkEmuCore(EmuCore);
 
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_mac <- mkFIFOF; // 接收数据缓冲
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_cfg <- mkFIFOF; // 接收数据缓冲
+    FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_per <- mkFIFOF; // 接收数据缓冲
 
     Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
     Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
@@ -98,6 +99,7 @@ module mkEmuCore(EmuCore);
         mkConnection(macbridge.macRxSrv[i], macNodes[i].highMacRxClt);
         
         mkConnection(cfgbridge.chanTxClt[i], channels[i].chanTxSrv);
+        mkConnection(cfgbridge.perTxClt[i], phyNodes[i].perSrv);
         mkConnection(axilitenodemanager.macRegClients[i], macNodes[i].macRegSrv);
         mkConnection(axilitenodemanager.phyRegClients[i], phyNodes[i].phyRegSrv);
     end
@@ -128,6 +130,7 @@ module mkEmuCore(EmuCore);
         axi2BridgeFifo.deq;
         if(axi2BridgeFifo_mac.notFull) axi2BridgeFifo_mac.enq(axiPkt);
         if(axi2BridgeFifo_cfg.notFull) axi2BridgeFifo_cfg.enq(axiPkt);
+        if(axi2BridgeFifo_per.notFull) axi2BridgeFifo_per.enq(axiPkt);
     endrule
 
     rule forward_axi_to_macbridge; 
@@ -146,11 +149,20 @@ module mkEmuCore(EmuCore);
         let axiPkt = axi2BridgeFifo_cfg.first;
         axi2BridgeFifo_cfg.deq;
         CfgBridge_TOP cfgbridge_top = unpack(truncate(axiPkt.tData));
-        if(cfgbridge_top.bridgeTag.control == 1)begin
+        if(cfgbridge_top.bridgeTag.control == 1 && cfgbridge_top.bridgeTag.notUsed == 0)begin
             if(cfgbridge_top.channelCfg.srcPhyId != cfgbridge_top.channelCfg.dstPhyId)begin
                 cfgbridge.chanTxSrv.request.put(cfgbridge_top.channelCfg);
                 // $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",cfgbridge_top.channelCfg.srcPhyId, cfgbridge_top.channelCfg.dstPhyId);
             end
+        end
+    endrule
+
+    rule forward_axi_to_cfgbridge_per;
+        let axiPkt = axi2BridgeFifo_per.first;
+        axi2BridgeFifo_per.deq;
+        CfgBridge_TOP_Per cfgBridge_TOP_Per = unpack(truncate(axiPkt.tData));
+        if(cfgBridge_TOP_Per.bridgeTag.control == 1 && cfgBridge_TOP_Per.bridgeTag.notUsed == 1)begin
+                cfgbridge.perTxSrv.request.put(cfgBridge_TOP_Per.perCfg);
         end
     endrule
         
@@ -160,6 +172,10 @@ module mkEmuCore(EmuCore);
 
     rule handshake_cfgbridge;
         let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
+    endrule
+
+    rule handshake_cfgbridge_per;
+        let resp_cfgbridge_per <- cfgbridge.perTxSrv.response.get;
     endrule
 
     interface dmaAxiLiteSlave = axilitenodemanager.axiLiteSlave;
