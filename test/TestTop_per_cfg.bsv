@@ -153,7 +153,7 @@ module mkTestRawEmuCore(Empty);
                 tLast: True,     // 假设每个MAC事件对应一个AXI包
                 tUser: 0
             };
-            // core.tx.put(axiPkt);
+            core.tx.put(axiPkt);
             // cfgbridge.chanTxSrv.request.put(chancfg);
             initIdx <= initIdx + 1;
             // $display("Initializing node %0d with distance %0d", initIdx, distance);

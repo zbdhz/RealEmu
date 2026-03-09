@@ -9,11 +9,11 @@ include ../Makefile.base
 # TESTFILE ?= TestBsvTop.bsv 
 # TOPMODULE ?= mkTestRawEmuCore
 
-TESTFILE ?= TestTop_axil_ite.bsv 
-TOPMODULE ?= mkTestRawEmuCore
-
-# TESTFILE ?= TestTop_per_cfg.bsv 
+# TESTFILE ?= TestTop_axil_ite.bsv 
 # TOPMODULE ?= mkTestRawEmuCore
+
+TESTFILE ?= TestTop_per_cfg.bsv 
+TOPMODULE ?= mkTestRawEmuCore
 
 # TESTFILE ?= TestBsvTop_collision.bsv 
 # TOPMODULE ?= mkTestRawEmuCore_collision

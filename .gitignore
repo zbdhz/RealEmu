@@ -2,6 +2,7 @@ build
 output
 backend/verilog
 generate
+scripts/*.png
 .Xil
 *.log
 *.jou
