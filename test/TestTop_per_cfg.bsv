@@ -153,7 +153,7 @@ module mkTestRawEmuCore(Empty);
                 tLast: True,     // 假设每个MAC事件对应一个AXI包
                 tUser: 0
             };
-            core.tx.put(axiPkt);
+            // core.tx.put(axiPkt);
             // cfgbridge.chanTxSrv.request.put(chancfg);
             initIdx <= initIdx + 1;
             // $display("Initializing node %0d with distance %0d", initIdx, distance);
@@ -170,9 +170,9 @@ module mkTestRawEmuCore(Empty);
         // 创建一个简单的MAC事件
         MacEvent txReq = getEmptyMacEvent;
         txReq.srcMacId = 1;  // 源节点ID
-        txReq.dstMacId = 0;  // 目标节点ID
+        txReq.dstMacId = 1023;  // 目标节点ID
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
-        txReq.mpduDigest.length = 1490;  // 数据包长度
+        txReq.mpduDigest.length = 100;  // 数据包长度
         txReq.rfParam.power = 60*32;//1920
         txReq.rfParam.mcs = 0;
         txReq.mpduDigest.duration = 2164;

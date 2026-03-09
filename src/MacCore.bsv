@@ -493,7 +493,13 @@ module mkMacDCF#(Integer id)(MacCore);
                     state = DCF_WAIT_BACKOFF;
                     backOffFsm.start(tuple2(True, False)); //SIFS 
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive RTS", id));
-                end 
+                end
+                else if(isBroadcastFrame(id, rxReq.srcMacId ,rxReq.dstMacId) && isDataFrame(rxReq.mpduDigest))begin
+                    rxReq.status = True;
+                    rxReq.dstMacId = fromInteger(id);
+                    highMacRxReqQ.enq(rxReq);
+                    lowMacRxYesToMEReqQ.deq;
+                end
                 else begin
                     // 直接丢弃
                     lowMacRxYesToMEReqQ.deq;
@@ -510,7 +516,10 @@ module mkMacDCF#(Integer id)(MacCore);
                         backOffFsm.start(tuple2(False, True)); //DIFS and expBackOff
                         let txReq = innerhighMacTxReqQ.first;
                         // 长帧使用RTS
-                        if (txReq.mpduDigest.length > macCfgReg.rtsThreshold) begin
+                        if(isBroadcastFrame(id, txReq.srcMacId, txReq.dstMacId))begin
+                            nextTask = NT_SEND_DATA;
+                            ctsTimeoutCountReg <= 0;
+                        end else if (txReq.mpduDigest.length > macCfgReg.rtsThreshold) begin
                             nextTask = NT_SEND_RTS;
                         end
                         else begin
@@ -588,8 +597,18 @@ module mkMacDCF#(Integer id)(MacCore);
                         let refFrame = innerhighMacTxReqQ.first;
                         refFrame.mpduDigest.duration = macCfgReg.sifs+ fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(ACK_MPDU_TIME_us));//待完善 10： SIFS; 48: synctime;  20: acktime
                         lowMacTxReqQ.enq(refFrame);
-                        dcfStateReg <= DCF_RECV_CTSACK;
-                        nextTaskReg <= NT_RECV_ACK;
+                        if(isBroadcastFrame(id, refFrame.srcMacId ,refFrame.dstMacId))begin
+                            dcfStateReg <= DCF_IDLE;
+                            nextTaskReg <= NT_IDLE;
+                            backOffFsm.resetCW;  // 重置窗口
+                            innerhighMacTxReqQ.deq;
+                            countDeltaWire <= -1;
+                            highMacTxRespQ.enq(GenericResp{});
+                            retransCountReg <= 0;
+                        end else begin
+                            dcfStateReg <= DCF_RECV_CTSACK;
+                            nextTaskReg <= NT_RECV_ACK;
+                        end
                         // immLog("mkMacDcf", "dcfFSM", $format("[%8d ns] Id %5d, Send Data", id, id));
                         $display("[%8d ns] send data pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
                     end

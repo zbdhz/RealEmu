@@ -22,11 +22,11 @@ import Axi4LiteTypes::*;
 
 //----------------------------------------------------
 // treedepth = 2 
-typedef 16 NODE_NUM;
-typedef 4 GROUP_SIZE; 
+typedef 4 NODE_NUM;
+typedef 2 GROUP_SIZE; 
 
 //axi-lite分组
-typedef 4                                     NODE_PER_GROUP_LITE;
+typedef 2                                     NODE_PER_GROUP_LITE;
 typedef TDiv#(NODE_NUM, NODE_PER_GROUP_LITE)  NODE_GROUP_LITE;
 //----------------------------------------------------
 

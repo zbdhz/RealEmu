@@ -32,6 +32,10 @@ typedef 28 RTS_MPDU_TIME_us;
 typedef 20 CTS_MPDU_TIME_us;
 typedef 20 ACK_MPDU_TIME_us;
 
+function Bool isBroadcastFrame(Integer id, MacId srcMacId, MacId dstMacId);
+    return dstMacId == 1023;
+endfunction
+
 function Bool isMyFrame(Integer id, MacId dstMacId);
     return (fromInteger(id) == dstMacId);
 endfunction
