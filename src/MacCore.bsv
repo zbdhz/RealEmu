@@ -517,15 +517,21 @@ module mkMacDCF#(Integer id)(MacCore);
                             nextTask = NT_SEND_DATA;
                             ctsTimeoutCountReg <= 0;
                         end
+                        state = DCF_WAIT_BACKOFF;
                     end
                     else if (nextTaskReg == NT_SEND_DATA) begin
-                    // 发送了RTS，并且已经收到了CTS
-                        backOffFsm.start(tuple2(True, False)); //SIFS 
+                    // 发送了RTS，已经收到了CTS
+                        backOffFsm.start(tuple2(True, False)); //SIFS
                         nextTask = NT_SEND_DATA;
                         // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, CTS SIFS", id));
+                        state = DCF_WAIT_BACKOFF;
                     end
-                    // else do nothing 
-                    state = DCF_WAIT_BACKOFF;
+                    else begin
+                    // nextTaskReg为残留值(如NT_RECV_DATA)且RX队列为空：
+                    // 不启动退避，丢弃残留任务回到IDLE，避免无退避进入WAIT_BACKOFF造成死锁
+                        nextTask = NT_IDLE;
+                        state = DCF_IDLE;
+                    end
                 // end
                 // else do nothing
             end

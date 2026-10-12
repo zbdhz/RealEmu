@@ -10,5 +10,11 @@ generate
 *.bin
 *.o
 *.txt
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
 __pycache__
 /Makefile
