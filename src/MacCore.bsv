@@ -559,6 +559,14 @@ module mkMacDCF#(Integer id)(MacCore);
                 case (nextTaskReg)
                 NT_SEND_RTS: begin
                     // 第一次BackOff，发送RTS帧
+                    // BUG-B fix: 发起自己发送前, 丢弃队头残留的迟到 CTS/ACK
+                    if (lowMacRxYesToMEReqQ.notEmpty) begin
+                        let staleRx = lowMacRxYesToMEReqQ.first;
+                        if (isCtsFrame(staleRx.mpduDigest) || isAckFrame(staleRx.mpduDigest)) begin
+                            lowMacRxYesToMEReqQ.deq;
+                            immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Drop stale CTS/ACK before send RTS", id));
+                        end
+                    end
                     let refFrame = innerhighMacTxReqQ.first;
                     let rtsFrame = setRtsFrame(refFrame);//隐藏条件，用refFrame中的NAV数值
                     lowMacTxReqQ.enq(rtsFrame);
@@ -591,6 +599,14 @@ module mkMacDCF#(Integer id)(MacCore);
                     end
                     else begin
                     // 已经收到过CTS，或者无需RTS/CRS, 发送Data
+                        // BUG-B fix: 发DATA前, 丢弃队头残留的迟到 CTS/ACK
+                        if (lowMacRxYesToMEReqQ.notEmpty) begin
+                            let staleRx = lowMacRxYesToMEReqQ.first;
+                            if (isCtsFrame(staleRx.mpduDigest) || isAckFrame(staleRx.mpduDigest)) begin
+                                lowMacRxYesToMEReqQ.deq;
+                                immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Drop stale CTS/ACK before send DATA", id));
+                            end
+                        end
                         let refFrame = innerhighMacTxReqQ.first;
                         refFrame.mpduDigest.duration = macCfgReg.sifs+ fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(ACK_MPDU_TIME_us));//待完善 10： SIFS; 48: synctime;  20: acktime
                         lowMacTxReqQ.enq(refFrame);
@@ -642,9 +658,9 @@ module mkMacDCF#(Integer id)(MacCore);
 
         // 等待对端反馈
         rule dcfRecvCtsAck if (dcfStateReg == DCF_RECV_CTSACK);
-            let rxReq = lowMacRxYesToMEReqQ.first;
             let nextTask = nextTaskReg;
             let state = dcfStateReg;
+            let ctsCnt = ctsTimeoutCountReg;  // BUG-A fix: 局部累积, 末尾单点写回, 避免同规则双写冲突
             // if (usGen.get)
             if(ackTimeoutCountReg == 0)begin
                 if(phyStatusWire.txEnd == True) begin
@@ -659,23 +675,25 @@ module mkMacDCF#(Integer id)(MacCore);
 
             if(ctsTimeoutCountReg == 0)begin
                 if(phyStatusWire.txEnd == True) begin
-                        ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
+                        ctsCnt = ctsCnt + 1;
                         $display("reset ctsTimeoutCountReg: %d\n", ctsTimeoutCountReg);
                 end
             end
             if(ctsTimeoutCountReg != 0)begin
                 if (usGen.get)
-                ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
+                ctsCnt = ctsCnt + 1;
             end
             
                 // ackTimeoutCountReg <= ackTimeoutCountReg + 1;
             if (lowMacRxYesToMEReqQ.notEmpty) begin
+                let rxReq = lowMacRxYesToMEReqQ.first;
                 if (isMyFrame(id, rxReq.dstMacId) && isCtsFrame(rxReq.mpduDigest)) begin
                     // 收到了CTS，准备发送DATA
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive CTS", id));
                     $display("[%8d ns] recv cts pkt in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
                     lowMacRxYesToMEReqQ.deq;
                     // lowMacRxRespQ.enq(GenericResp{});
+                    ctsCnt = 0; // BUG-A fix: RTS->CTS 段结束, DATA->ACK 段由 ackTimeoutCountReg 独立计时
                     state = DCF_IDLE;
                     nextTask = NT_SEND_DATA;
                 end
@@ -701,6 +719,9 @@ module mkMacDCF#(Integer id)(MacCore);
                         retransCountReg <= retransCountReg + 1;
                         backOffFsm.incrCW;  // 失败后增大退避窗口
                         immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
+                        // BUG-B fix: 丢弃帧后退出 RECV_CTSACK, 重新竞争信道重传
+                        state = DCF_IDLE;
+                        nextTask = NT_IDLE;
                     end 
                     // 超过重试次数，发送失败
                     else begin
@@ -710,6 +731,8 @@ module mkMacDCF#(Integer id)(MacCore);
                         countDeltaWire <= -1;
                         let txReq = innerhighMacTxReqQ.first;
                         txReq.status = False;
+                        state = DCF_IDLE;      // BUG-B fix: 丢弃帧后必须退出本状态
+                        nextTask = NT_IDLE;
                     end
                 end
             end
@@ -737,6 +760,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 end
                 //更新NAV
             end
+            ctsTimeoutCountReg <= ctsCnt;
             dcfStateReg <= state;
             nextTaskReg <= nextTask;
         endrule
