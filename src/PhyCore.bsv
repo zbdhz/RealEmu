@@ -280,13 +280,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     Server#(Tuple2#(UInt#(20),UInt#(10)), Tuple2#(UInt#(10),UInt#(10))) divider <- mkDivider(1);
     rule feed_operation;
         if(txValidReg) begin
-            // UInt#(20) aligned_dividend = zeroExtend(txLenReg) << 3;  
-            UInt#(20) aligned_dividend = (txLenReg == 0) ? zeroExtend(1'b1) << 3 :zeroExtend(txLenReg) << 3;  
+            // +22 bit = SERVICE(16) + tail(6), 对齐 ns-3: N_sym = ceil((16 + 8L + 6)/NDBPS)
+            UInt#(20) aligned_dividend = (txLenReg == 0) ? zeroExtend(1'b1) << 3 : (zeroExtend(txLenReg) << 3) + 22;
             divider.request.put(tuple2(aligned_dividend, ndbpsWire));
-        end 
+        end
         else if(rxValidReg) begin
-            // UInt#(20) aligned_dividend = zeroExtend(rxLenReg) << 3; 
-            UInt#(20) aligned_dividend = (rxLenReg == 0) ? zeroExtend(1'b1) << 3 :zeroExtend(rxLenReg) << 3;
+            UInt#(20) aligned_dividend = (rxLenReg == 0) ? zeroExtend(1'b1) << 3 : (zeroExtend(rxLenReg) << 3) + 22;
             divider.request.put(tuple2(aligned_dividend, ndbpsWire));
             //immLog("mkPhyYansWifi", "feed_operation", $format("Id %5d, Phy Rx Event", id));
             // $display("PHY_RX EVENT");

@@ -715,24 +715,29 @@ module mkMacDCF#(Integer id)(MacCore);
                 else begin
                     lowMacRxYesToMEReqQ.deq;
                     // lowMacRxRespQ.enq(GenericResp{});
-                    if (retransCountReg < macCfgReg.retryLimit) begin
-                        retransCountReg <= retransCountReg + 1;
-                        backOffFsm.incrCW;  // 失败后增大退避窗口
-                        immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
-                        // BUG-B fix: 丢弃帧后退出 RECV_CTSACK, 重新竞争信道重传
-                        state = DCF_IDLE;
-                        nextTask = NT_IDLE;
-                    end 
-                    // 超过重试次数，发送失败
-                    else begin
-                        retransCountReg <= 0;
-                        backOffFsm.resetCW;  // 重置窗口
-                        innerhighMacTxReqQ.deq;
-                        countDeltaWire <= -1;
-                        let txReq = innerhighMacTxReqQ.first;
-                        txReq.status = False;
-                        state = DCF_IDLE;      // BUG-B fix: 丢弃帧后必须退出本状态
-                        nextTask = NT_IDLE;
+                    // Fix-B: 等待 CTS/ACK 期间只把"发给自己的意外帧"当失败;
+                    // 发往他人的旁听帧仅出队, 保持 RECV_CTSACK 继续等 (失败判据收敛到 timeout,
+                    // 排在其后的合法 CTS/ACK 可正常匹配)
+                    if (isMyFrame(id, rxReq.dstMacId)) begin
+                        if (retransCountReg < macCfgReg.retryLimit) begin
+                            retransCountReg <= retransCountReg + 1;
+                            backOffFsm.incrCW;  // 失败后增大退避窗口
+                            immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
+                            // BUG-B fix: 丢弃帧后退出 RECV_CTSACK, 重新竞争信道重传
+                            state = DCF_IDLE;
+                            nextTask = NT_IDLE;
+                        end
+                        // 超过重试次数，发送失败
+                        else begin
+                            retransCountReg <= 0;
+                            backOffFsm.resetCW;  // 重置窗口
+                            innerhighMacTxReqQ.deq;
+                            countDeltaWire <= -1;
+                            let txReq = innerhighMacTxReqQ.first;
+                            txReq.status = False;
+                            state = DCF_IDLE;      // BUG-B fix: 丢弃帧后必须退出本状态
+                            nextTask = NT_IDLE;
+                        end
                     end
                 end
             end
