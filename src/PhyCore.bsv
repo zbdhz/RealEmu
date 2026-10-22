@@ -89,6 +89,10 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     Int#(12)   lowSNR       = -160;   
     Int#(12)   highSNR      = 960;
     Int#(12)   threash      =-960;   // threash = -30dBm  
+    // 碰撞模型对齐 ns-3: CS(Clear Sense)能量门限, 4dBm。
+    // 落在隐藏对收功率 74(d=1023,2.3dBm) 与最远正常对 186(d=682,5.8dBm) 之间,
+    // 用于: ①CCA 忙判定门控 ②SYNC 进入门限 ③碰撞干扰有效性判据
+    Int#(12)   csThreash    = 128;
     //---------------------------
     //reg wire 
     //---------------------------
@@ -116,6 +120,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     
     Reg#(PhyFsmState)stateReg           <- mkReg(PHY_IDLE); 
     Wire#(Bool)      ccaBusyReg         <- mkDWire(False); 
+    // 碰撞标记: 正在收帧时又来一个过 CS 门限的新帧 -> 当前帧判废 (对齐 ns-3 无 capture 双败)
+    Reg#(Bool)       collideReg         <- mkReg(False);
     Reg#(Bool)       syncCrcReg         <- mkDReg(False);
     Reg#(Bool)       syncEndReg         <- mkDReg(False);
     Reg#(Bool)       crcReg             <- mkDReg(False);
@@ -229,7 +235,9 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     //---------------------------
     rule updateccaBusyReg;
     	ccaBusyReg <= (ccaTimerReg > 0) || (stateReg == PHY_TX);
-    	if (psduTimeValidWire) begin
+        // CCA 门控: rx 事件仅当过 CS 能量门限才武装忙定时器(弱帧=隐藏节点不占介质);
+        // TX 侧自身帧无条件武装。psduTimeValidWire 到达时 rxPowerReg 仍是触发帧功率。
+        if (psduTimeValidWire && (stateReg == PHY_TX || rxPowerReg > csThreash)) begin
             ccaTimerReg <= (ccaTimerReg > (psduTimeWire + syncTime)) ? (ccaTimerReg - 1) : (psduTimeWire + syncTime - 1);
         end 
         else if(ccaTimerReg > 0)begin
@@ -300,6 +308,13 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
      endrule
 
     //---------------------------
+    // 碰撞检测(并入 handlePhyState 的 SYNC/RX 分支):
+    // 接收中又来一个过 CS 门限的新帧 -> collideReg 置位, 当前帧判废。
+    // 新帧自身不重同步(状态机忙被丢弃) => 两帧全败, 对齐 ns-3 无 capture 碰撞语义。
+    // 发送方走既有 timeout 重传路径, MacCore 零改动。
+    //---------------------------
+
+    //---------------------------
     // stateReg
     //---------------------------
     rule handlePhyState;
@@ -319,8 +334,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                     $display("[%8d ns] id: %0d, PHY_TX start", $time, id);
                     // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
                 end
-                else if (rxValidReg && (rxPowerReg > threash)) begin
-                    // 进入同步状态
+                else if (rxValidReg && (rxPowerReg > csThreash)) begin
+                    // 进入同步状态 (CS 门限: 弱于门限的帧不占用接收机, 对齐隐藏节点语义)
                     rxBeginReg      <= True;
                     stateReg        <= PHY_SYNC;
                     syncTimerReg    <= syncTime;
@@ -338,6 +353,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             end
     
             PHY_SYNC: begin
+                // 碰撞: 同步中被新强帧重叠 -> 判废
+                if (rxValidReg && (rxPowerReg > csThreash)) begin
+                    collideReg <= True;
+                    $display("[%8d ns] id: %0d, COLLISION in SYNC (power:%d)",
+                             $time, id, rxPowerReg);
+                end
                 // 同步计时器处理
                 if (syncTimerReg > 0) begin
                     syncTimerReg <= syncTimerReg - 1;
@@ -372,6 +393,13 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             end
     
             PHY_RX: begin
+                // 碰撞: 接收中被新强帧重叠 -> 判废
+                // (帧结束周期不置位: 与帧尾清零写冲突, 且 CRC 判决读旧值语义不变)
+                if (rxValidReg && (rxPowerReg > csThreash) && !perValidWire) begin
+                    collideReg <= True;
+                    $display("[%8d ns] id: %0d, COLLISION in RX (power:%d)",
+                             $time, id, rxPowerReg);
+                end
                 // 接收计时器处理
                 if (rxTimerReg > 0) begin
                     rxTimerReg <= rxTimerReg - 1;
@@ -381,7 +409,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 if (perValidWire) begin
                     stateReg <= PHY_IDLE;
                     rxEndReg <= True;
-                    if(perWire >= unpack(randomValueReg))begin
+                    collideReg <= False;          // 帧尾清零碰撞标记
+                    if(perWire >= unpack(randomValueReg) && !collideReg)begin
                         crcReg <= True;
                         // if(id==0 || id == 1)
                             $display("%0d CRC OK",id);
