@@ -26,6 +26,8 @@ import DReg::*;
 import Types::*;
 import PrimUtils::*;
 import CsmaUtils::*;
+import FrameTiming::*;
+import Vector::*;
 
 /*  
  *  MacEvent --->(PPDU DATA)-----> | MacCore | ---->(RTS,CTS,DATA,ACK)----> |PhyCore| ----> |Channel|
@@ -35,851 +37,490 @@ interface MacCore;
     interface MacSrv highMacTxSrv;
     interface MacClt highMacRxClt;
 
-    interface MacSrv lowMacRxSrv;
-    interface MacClt lowMacTxClt;
+    interface AirSrv lowMacRxSrv;
+    interface AirClt lowMacTxClt;
 
     interface RegAccessSrv macRegSrv;
 
     interface Put#(PhyStatus) phyStatus;
 endinterface
 
-// A Fake MAC without any access control
-// (* always_enabled = "phyStatus.put" *)
-// module mkMacPipe#(Integer id)(MacCore);
-//     FIFO#(MacEvent)    highMacTxReqQ  <- mkFIFO;
-//     FIFO#(GenericResp) highMacTxRespQ <- mkFIFO;
-//     FIFO#(MacEvent)    highMacRxReqQ  <- mkFIFO;
-//     FIFO#(GenericResp) highMacRxRespQ <- mkFIFO;
-
-//     FIFO#(MacEvent)    lowMacTxReqQ   <- mkFIFO;
-//     FIFO#(GenericResp) lowMacTxRespQ  <- mkFIFO;
-//     FIFO#(MacEvent)    lowMacRxReqQ   <- mkFIFO;
-//     FIFO#(GenericResp) lowMacRxRespQ  <- mkFIFO;
-
-//     Reg#(MacConfig)  macCfgReg      <- mkReg(getDefaultMacCfg);
-//     Reg#(MacStatus)  macStaReg      <- mkReg(MacStatus{backOffState:CSMA_IDLE, dcfState:DCF_IDLE});
-
-//     Wire#(PhyStatus)  phyStatusWire <- mkBypassWire;
-
-//     rule forwardTx;
-//         let txReq = highMacTxReqQ.first;
-//         highMacTxReqQ.deq;
-//         highMacTxRespQ.enq(GenericResp{});
-//         lowMacTxReqQ.enq(txReq);
-//     endrule
-
-//     rule handshakeTx;
-//         lowMacTxRespQ.deq;
-//     endrule
-
-//     rule forwardRx;
-//         let rxReq = lowMacRxReqQ.first;
-//         lowMacRxReqQ.deq;
-//         if (rxReq.dstMacId == fromInteger(id)) begin
-//             highMacRxReqQ.enq(rxReq);
-//         end
-//     endrule
-
-//     rule handshakeRx;
-//         highMacRxRespQ.deq;
-//     endrule
-
-//     interface highMacTxSrv = toGPServer(highMacTxReqQ, highMacTxRespQ);
-//     interface highMacRxClt = toGPClient(highMacRxReqQ, highMacRxRespQ);
-//     interface lowMacTxClt  = toGPClient(lowMacTxReqQ, lowMacTxRespQ);
-//     interface lowMacRxSrv  = toGPServer(lowMacRxReqQ, lowMacRxRespQ);
-    
-//     interface Put phyStatus;
-//         method Action put(PhyStatus phyStatus);
-//             phyStatusWire <= phyStatus;
-//         endmethod
-//     endinterface
-
-//     // interface Put putmaccfg;
-//     //     method Action put(MacConfig cfg);
-//     //         macCfgReg <= cfg;
-//     //     endmethod
-//     // endinterface
-
-//     // interface Get getmaccfg;
-//     //     method ActionValue#(MacConfig) get;
-//     //         let cfg = macCfgReg;
-//     //         return cfg;
-//     //     endmethod
-//     // endinterface
-    
-//     //interface configSrv    = toGPServer(configReqQ, configRespQ);
-// endmodule
-
-// ============================= 802.11 NAV ==============================
 interface Nav_IFC;
-    method Action               handleFrame(MacEvent frame);        // 统一处理帧
-    method Action               resetNav();                         // 强制复位NAV
-    method Duration             getNavValue();                      // 获取当前NAV值
-    method Bool                 isNavWaiting();                     // NAV是否等待完成
-    interface Put#(MacConfig)   putmaccfg;                          // 配置参数
+    method Action handleFrame(MacEvent frame);
+    method Action resetNav();
+    method Duration getNavValue();
+    method Bool isNavWaiting();
+    interface Put#(MacConfig) putmaccfg;
 endinterface
 
-module mkNav#(
-    TimeGen usGen,
-    Integer id            
-)(Nav_IFC);
-    // --------------------- 寄存器声明 ---------------------
-    Reg#(Duration)           navReg                  <- mkReg(0);
-    Reg#(Duration)           newNavReg               <- mkDReg(0);
-    Reg#(MacConfig)          macCfg                  <- mkReg(getDefaultMacCfg);
-    
-    // --------------------- 内部逻辑 ---------------------
-    // RTS超时检测以及等待nav
-    rule checkRtsTimeout;
-        if (usGen.get && navReg > newNavReg && navReg > 0) begin
-            navReg <= navReg - 1;
-            // immLog("mkNav", "checkRtsTimeout" , $format("Node %0d: NAV decrease navReg = %0d", id , navReg));
-        end
-        else if (navReg < newNavReg)
-            navReg <= newNavReg;
-        else
-            navReg <= navReg;
+module mkNav#(TimeGen usGen, Integer id)(Nav_IFC);
+    Reg#(Duration) remaining <- mkReg(0);
+    RWire#(Duration) incoming <- mkRWire;
+    Reg#(Bool) reset <- mkDReg(False);
+    Reg#(Bool) enabled <- mkReg(True);
+    RWire#(Bool) cfgUpdate <- mkRWire;
+    rule tick;
+        Duration n = usGen.get && remaining != 0 ? remaining - 1 : remaining;
+        if (incoming.wget matches tagged Valid .v) n = max(n, v);
+        let en = fromMaybe(enabled, cfgUpdate.wget);
+        remaining <= reset || !en ? 0 : n;
+        enabled <= en;
     endrule
-
-    method Action handleFrame(MacEvent frame);
-        Duration timeoutThresholdReg = zeroExtend(2 * macCfg.sifs + 2 * macCfg.slot + macCfg.sigTime + macCfg.ofdmSymbolTime * macCfg.maxNum + macCfg.phyDelayTime); //参考openwifi
-        // 处理Duration字段
-        if (frame.mpduDigest.duration[15] == 0) begin
-            // $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
-            if(zeroExtend(frame.mpduDigest.duration[14:0]) < timeoutThresholdReg) begin
-                newNavReg <= timeoutThresholdReg;
-                // $display("myid:%d, newNavReg = %0d",id,timeoutThresholdReg);
-                $display("my id:%0d, duration = %0d",id,timeoutThresholdReg);
-                // newNavReg <= zeroExtend(frame.mpduDigest.duration[14:0]);
-            end
-            else begin
-                $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
-                newNavReg <= zeroExtend(frame.mpduDigest.duration[14:0]);
-            end
-        end
-        // if (frame.mpduDigest.duration[15] == 0) begin
-        //     $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
-        //     newNavReg <= zeroExtend(frame.mpduDigest.duration[14:0]);
-        // end
+    method Action handleFrame(MacEvent f);
+        if (f.status && f.dstMacId != fromInteger(id) && f.mpduDigest.duration[15] == 0)
+            incoming.wset(f.mpduDigest.duration);
     endmethod
-
-    method Action resetNav();
-        // immLog("mkNav", "resetNav" , $format("Node %0d: Manual NAV reset", id));
-    endmethod
-
-    method Duration getNavValue() = navReg;
-    
-    method Bool isNavWaiting() = (navReg != 0);
-
+    method Action resetNav(); reset <= True; endmethod
+    method Duration getNavValue() = remaining;
+    method Bool isNavWaiting() = enabled && remaining != 0;
     interface Put putmaccfg;
-        method Action put(MacConfig cfg);
-            macCfg <= cfg;
-        endmethod
+        method Action put(MacConfig cfg); cfgUpdate.wset(cfg.navEn); endmethod
     endinterface
 endmodule
 
-// ================================== 802.11 DCF MAC ================================
 interface CsmaBackOff_IFC;
-    method Action    start(Tuple2#(Bool,Bool) option);  // tuple2(isDifs, isNeedStage2RandomBackOff)
-    method Action    softRst();             // 软复位，上层强制清空CSMA状态机
-    method Action    incrCW();              // 碰撞后指数增长窗口
-    method Action    resetCW();             // 成功接收窗口
-    method Bool      available();           // 退避模块是否可用，仅当可用时调用start
-    method CsmaState getStatus();           // 获取退避状态机当前状态
-    method Bool      done();                // 退避完成
-    interface Put#(MacConfig) putmaccfg;    // 配置退避状态机参数
+    method ContWindowExp currentCW();
+    method Action start(Tuple2#(Bool,Bool) option);
+    method Action softRst();
+    method Action suspendContention();
+    method Action incrCW();
+    method Action resetCW();
+    method Bool available();
+    method CsmaState getStatus();
+    method Bool done();
+    method TimeSlot remainingSlots();
+    interface Put#(MacConfig) putmaccfg;
     interface Nav_IFC navctrl;
 endinterface
 
-module mkCsmaCaBackOff#(
-    Wire#(PhyStatus) phyStatusWire,
-    TimeGen usGen,
-    TimeGen slotGen,
-    Integer id
-)(CsmaBackOff_IFC);
-    Reg#(CsmaState)  csmaStateReg           <- mkReg(CSMA_IDLE);
-    Reg#(Bool)       isSendAllowReg         <- mkDReg(False);
-
-    Reg#(TimeUs)     waitTimeIFSReg         <- mkReg(0);
-    Reg#(TimeSlot)   waitTimeReg            <- mkReg(0);
-
-    Reg#(Bool)       startReg               <- mkDReg(False);
-    PulseWire        resetWire              <- mkPulseWire;
-
-    Reg#(MacConfig)  macCfgReg              <- mkReg(getDefaultMacCfg);
-    Reg#(Bool)       isSifsReg              <- mkReg(False);  // Option1: 是否是短帧间间隔类型退避
-    Reg#(Bool)       isExpBackOffReg        <- mkReg(False);  // Option2: IFS退避后是否需要随机退避
-
-    let              expBackOffGen          <- mkExpBackoffGenerator(id);
-    let              navController          <- mkNav(usGen, id); 
-    
-    Reg#(TimeUs) suspendTimer <- mkReg(0);
+module mkCsmaCaBackOff#(Wire#(PhyStatus) phyStatusWire, TimeGen usGen,
+    TimeGen slotGen, Integer id)(CsmaBackOff_IFC);
+    Reg#(CsmaState) state <- mkReg(CSMA_IDLE);
+    Reg#(MacConfig) cfg <- mkReg(getDefaultMacCfg);
+    Reg#(Bool) sifs <- mkReg(False);
+    Reg#(Bool) random <- mkReg(False);
+    Reg#(Bool) sampled <- mkReg(False);
+    Reg#(TimeSlot) slots <- mkReg(0);
+    Reg#(UInt#(32)) cycles <- mkReg(0);
+    Reg#(Bool) badRx <- mkReg(False);
+    PulseWire completedIfs <- mkPulseWire;
+    RWire#(Tuple2#(Bool,Bool)) beginWait <- mkRWire;
+    PulseWire reset <- mkPulseWire;
+    PulseWire suspendRequest <- mkPulseWire;
+    Reg#(Bool) savedValid <- mkReg(False);
+    Reg#(Bool) savedSampled <- mkReg(False);
+    Reg#(TimeSlot) savedSlots <- mkReg(0);
+    Reg#(Bool) allow <- mkDReg(False);
+    let expBackOffGen <- mkExpBackoffGenerator(id);
+    let navController <- mkNav(usGen, id);
+    Bool busy = phyStatusWire.cca || (!sifs && navController.isNavWaiting);
+    UInt#(32) ifsCycles = zeroExtend(unpack(sifs ? cfg.sifs : (badRx ? cfg.eifs : cfg.difs))) * fromInteger(valueOf(US_CYCLES));
+    rule rememberRx;
+        if (phyStatusWire.fcsEn) badRx <= !phyStatusWire.fcsCorrect;
+        else if (completedIfs) badRx <= False;
+    endrule
     rule csmaFSM;
-
-        case (csmaStateReg)
-
-            // 初始状态，仅当IDLE时可以使用start方法
-            CSMA_IDLE: begin
-                isSendAllowReg <= False;
-                if (startReg) begin
-                    waitTimeIFSReg <= isSifsReg ? macCfgReg.sifs : macCfgReg.difs;   // unit is us
-                    if (phyStatusWire.cca || navController.isNavWaiting()) begin
-                        csmaStateReg <= CSMA_BUSY;
-                    end 
-                    else begin
-                        csmaStateReg <= CSMA_BACKOFF_IFS;
-                    end
-                end
-                // else do nothing
+        if (reset) begin
+            state <= CSMA_IDLE; sampled <= False; slots <= 0; cycles <= 0; savedValid <= False;
+        end
+        else if (suspendRequest) begin
+            if(random && !sifs) begin
+                savedValid <= True; savedSampled <= sampled; savedSlots <= slots;
             end
-
-            // 信道繁忙：需要重启IFS倒计时
-            CSMA_BUSY: begin
-                if (resetWire) begin
-                    csmaStateReg <= CSMA_IDLE;
+            state <= CSMA_IDLE; cycles <= 0;
+        end
+        else case (state)
+            CSMA_IDLE: if (beginWait.wget matches tagged Valid .option) begin
+                sifs <= tpl_1(option); random <= tpl_2(option);
+                if(!tpl_1(option) && tpl_2(option) && savedValid) begin
+                    sampled <= savedSampled; slots <= savedSlots; savedValid <= False;
                 end
-                else if(!(phyStatusWire.cca || navController.isNavWaiting())) begin
-                    if((!phyStatusWire.fcsCorrect) && phyStatusWire.fcsEn) begin
-                        waitTimeIFSReg <= macCfgReg.eifs;
-                    end
-                    else begin
-                        waitTimeIFSReg <= isSifsReg ? macCfgReg.sifs : macCfgReg.difs;
-                    end
-                    csmaStateReg <= CSMA_BACKOFF_IFS;
-                end
-                // else do nothing
+                else sampled <= False;
+                cycles <= 0; state <= CSMA_BUSY;
             end
-
-            // 倒计时 SIFS/DIFS/EIFS
+            CSMA_BUSY, CSMA_SUSPEND: if (!busy) begin
+                cycles <= 0; state <= CSMA_BACKOFF_IFS;
+            end
             CSMA_BACKOFF_IFS: begin
-                if (resetWire) begin
-                    csmaStateReg <= CSMA_IDLE;
-                end
-                else if(phyStatusWire.cca || navController.isNavWaiting()) begin
-                    csmaStateReg <= CSMA_BUSY;
-                end
-                else begin
-                    if (waitTimeIFSReg == 0) begin
-                        // 需要进行指数增长随机退避
-                        if (isExpBackOffReg) begin
-                            csmaStateReg <= CSMA_BACKOFF;
-                            let randWaitTime <- expBackOffGen.next.get;
-                            waitTimeReg <= randWaitTime;
-                            immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, Enter ExpWindow BackOff, randWaitTime = ", id, randWaitTime));
+                if (busy) begin cycles <= 0; state <= CSMA_BUSY; end
+                else if (cycles + 1 >= ifsCycles) begin
+                    if (!sifs) completedIfs.send;
+                    cycles <= 0;
+                    if (random) begin
+                        if (!sampled) begin
+                            let n <- expBackOffGen.next.get; slots <= n; sampled <= True;
                         end
-                        // 只进行IFS退避，无需进行随机退避
-                        else begin
-                            csmaStateReg <= CSMA_DONE;
-                            // immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, BackOff Done without expWindow", id));
-                        end
+                        state <= CSMA_BACKOFF;
                     end
-                    else if (usGen.get) begin
-                        waitTimeIFSReg <= waitTimeIFSReg - 1;
-                    end
-                    // else do nothing
+                    else state <= CSMA_DONE;
                 end
+                else cycles <= cycles + 1;
             end
-
-            // 指数增长随机退避
             CSMA_BACKOFF: begin
-                if (resetWire) begin
-                    csmaStateReg <= CSMA_IDLE;
+                if (busy) begin cycles <= 0; state <= CSMA_SUSPEND; end
+                else if (slots == 0) state <= CSMA_DONE;
+                else if (cycles + 1 >= zeroExtend(unpack(cfg.slot)) * fromInteger(valueOf(US_CYCLES))) begin
+                    slots <= slots - 1; cycles <= 0;
                 end
-                else if(phyStatusWire.cca || navController.isNavWaiting()) begin
-                    csmaStateReg <= CSMA_SUSPEND;
-                end
-                else begin
-                    if(waitTimeReg == 0) begin
-                        csmaStateReg <= CSMA_DONE;
-                        // immLog("mkCsmaCaBackOff", "csmaFSM", $format("Id %5d, BackOff Done", id));
-                    end
-                    else if (slotGen.get) begin
-                        waitTimeReg <= waitTimeReg - 1;
-                    end
-                    // else : Do Nothing
-                end
+                else cycles <= cycles + 1;
             end
-
-            // 指数随机退避期间暂停，保留退避窗口
-            CSMA_SUSPEND: begin
-                if (resetWire) begin
-                    csmaStateReg <= CSMA_IDLE;
-                end
-                else if(!(phyStatusWire.cca || navController.isNavWaiting())) begin
-                    csmaStateReg <= CSMA_BACKOFF;
-                end
-                // else do nothing
-            end
-
-            CSMA_DONE: begin
-                isSendAllowReg   <= True;
-                csmaStateReg     <= CSMA_IDLE;
-                waitTimeReg      <= 0;  // 重置退避计数器
-            end
+            CSMA_DONE: begin allow <= True; state <= CSMA_IDLE; end
         endcase
     endrule
-
-    // 启动一次退避
-    method Action start(Tuple2#(Bool,Bool) option);
-        startReg  <= True;
-        let {isSifs, isExpBackOff} = option;
-        isSifsReg <= isSifs;
-        isExpBackOffReg <= isExpBackOff;
-    endmethod
-
-    // 退避状态机是否可用
-    method Bool available();
-        return (csmaStateReg == CSMA_IDLE);
-    endmethod
-
-    // 查询退避状态机状态
-    method  CsmaState getStatus();
-        return csmaStateReg;
-    endmethod
-
-    // 退避是否完成
-    method Bool done();
-        return isSendAllowReg;
-    endmethod
-
-    // 强制状态机重置
-    method Action softRst();
-        resetWire.send;
-    endmethod
-
-    // 传输失败增窗
-    method Action incrCW();
-        expBackOffGen.incrCW;
-    endmethod
-
-    // 传输成功重置窗口
-    method Action resetCW();
-        expBackOffGen.resetCW;
-    endmethod
-
-    // 配置参数
+    method Action start(Tuple2#(Bool,Bool) option); beginWait.wset(option); endmethod
+    method Action softRst(); reset.send; endmethod
+    method Action suspendContention(); suspendRequest.send; endmethod
+    method Action incrCW(); expBackOffGen.incrCW; endmethod
+    method Action resetCW(); expBackOffGen.resetCW; endmethod
+    method Bool available() = state == CSMA_IDLE;
+    method CsmaState getStatus() = state;
+    method Bool done() = allow;
+    method TimeSlot remainingSlots() = slots;
+    method ContWindowExp currentCW() = expBackOffGen.currentCW;
     interface Put putmaccfg;
-        method Action put(MacConfig macCfg);
-            macCfgReg <= macCfg;
-            expBackOffGen.putmaccfg.put(macCfg);
+        method Action put(MacConfig c) if (state == CSMA_IDLE);
+            cfg <= c; expBackOffGen.putmaccfg.put(c); navController.putmaccfg.put(c);
         endmethod
     endinterface
-
-    //引出nav模块配置
     interface navctrl = navController;
-
 endmodule
 
-// 802.11 DCF Low Mac Layer
+// The timeout is a response START budget after TXEND. Valid synchronization
+// extends to header completion, then a matched header extends to RXEND.
+typedef enum { RESP_TX, RESP_START, RESP_HEADER, RESP_COMPLETE } ResponseStage
+    deriving(Bits, Eq, FShow);
 
 (* always_enabled = "phyStatus.put" *)
-// (* synthesize *)
 module mkMacDCF#(Integer id)(MacCore);
-    FIFOF#(MacEvent)    highMacTxReqQ  <- mkFIFOF;
-    FIFOF#(MacEvent)    innerhighMacTxReqQ  <- mkSizedFIFOF(valueOf(MAC_FIFOIN_DEPTH));
+    FIFOF#(MacEvent) highMacTxReqQ <- mkFIFOF;
+    FIFOF#(MacEvent) innerhighMacTxReqQ <- mkSizedFIFOF(valueOf(MAC_FIFOIN_DEPTH));
     FIFOF#(GenericResp) highMacTxRespQ <- mkFIFOF;
-    FIFOF#(MacEvent)    highMacRxReqQ  <- mkFIFOF;
+    FIFOF#(MacEvent) highMacRxReqQ <- mkFIFOF;
     FIFOF#(GenericResp) highMacRxRespQ <- mkFIFOF;
-
-    FIFOF#(MacEvent)    lowMacTxReqQ   <- mkFIFOF;
-    FIFOF#(GenericResp) lowMacTxRespQ  <- mkFIFOF;
-    FIFOF#(MacEvent)    lowMacRxReqQ   <- mkFIFOF;
-    FIFOF#(GenericResp) lowMacRxRespQ  <- mkFIFOF;
-
-    //新增配置查询和下发接口
-    FIFOF#(RegAccessReq)  macRegReqQ  <- mkFIFOF;
+    FIFOF#(AirFrame) lowMacTxReqQ <- mkFIFOF;
+    FIFOF#(GenericResp) lowMacTxRespQ <- mkFIFOF;
+    FIFOF#(AirFrame) lowMacRxReqQ <- mkFIFOF;
+    FIFOF#(GenericResp) lowMacRxRespQ <- mkFIFOF;
+    FIFOF#(AirFrame) lowMacRxYesToMEReqQ <- mkLFIFOF;
+    FIFOF#(AirFrame) lowMacRxNotToMEReqQ <- mkLFIFOF;
+    FIFOF#(RegAccessReq) macRegReqQ <- mkFIFOF;
     FIFOF#(RegAccessResp) macRegRespQ <- mkFIFOF;
-    //新增包队列控制
-    Reg#(UInt#(32))     mac_fifoin_count <- mkReg(0);
-    Wire#(Int#(8))      countDeltaWire <- mkDReg(0);
-
-    FIFOF#(MacEvent)    lowMacRxYesToMEReqQ  <- mkLFIFOF;
-    FIFOF#(MacEvent)    lowMacRxNotToMEReqQ  <- mkLFIFOF;
-
-    Reg#(MacConfig)  macCfgReg      <- mkReg(getDefaultMacCfg);
-    Reg#(MacStatus)  macStaReg      <- mkReg(MacStatus{backOffState:CSMA_IDLE, dcfState:DCF_IDLE});
-
-    Reg#(MacEvent)   lasthighMacTxReq             <- mkReg(getDefaultMacEvent);
-
-    Wire#(PhyStatus)  phyStatusWire       <- mkBypassWire;
-    
-    Reg#(DcfNextTask)    nextTaskReg        <- mkReg(NT_IDLE);
-    Reg#(DcfState)       dcfStateReg        <- mkReg(DCF_IDLE);
-    Reg#(RetryTime)      retransCountReg    <- mkReg(0);
-    Reg#(TimeUs)         ackTimeoutCountReg <- mkReg(0);
-    Reg#(TimeUs)         ctsTimeoutCountReg <- mkReg(0);
-
-`ifdef BSIM
-    TimeGen              usGen              <- mkUsGen(1);
-`else
-    TimeGen              usGen              <- mkUsGen(200);
-`endif
-    TimeGen              slotGen            <- mkSlotGen(usGen, macCfgReg);
-    let                  backOffFsm         <- mkCsmaCaBackOff(phyStatusWire, usGen, slotGen, id);
-
-    rule phyHandShake;
-        lowMacTxRespQ.deq;
+    Reg#(MacConfig) macCfgReg <- mkReg(getDefaultMacCfg);
+    Reg#(MacEvent) lasthighMacTxReq <- mkReg(getDefaultMacEvent);
+    Wire#(PhyStatus) phyStatusWire <- mkBypassWire;
+    Reg#(DcfNextTask) nextTaskReg <- mkReg(NT_IDLE);
+    Reg#(DcfState) dcfStateReg <- mkReg(DCF_IDLE);
+    Reg#(RetryTime) retransCountReg <- mkReg(0);
+    Reg#(UInt#(32)) clock <- mkReg(0);
+    Reg#(UInt#(32)) deadline <- mkReg(0);
+    Reg#(ResponseStage) responseStage <- mkReg(RESP_TX);
+    Reg#(Bit#(32)) exchangeId <- mkReg(0);
+    Reg#(Duration) reservedRts <- mkReg(0);
+    TimeGen usGen <- mkUsGen(valueOf(US_CYCLES));
+    TimeGen slotGen <- mkSlotGen(usGen, macCfgReg);
+    let backOffFsm <- mkCsmaCaBackOff(phyStatusWire, usGen, slotGen, id);
+    Reg#(Bit#(32)) cfgGeneration <- mkReg(0);
+    Reg#(TimeUs) cfgQuietUs <- mkReg(0);
+    Reg#(UInt#(32)) mac_fifoin_count <- mkReg(0);
+    Vector#(12, PulseWire) hits <- replicateM(mkPulseWire);
+    Vector#(12, Reg#(Bit#(32))) counts <- replicateM(mkReg(0));
+    Vector#(12, Reg#(Bit#(32))) snapshot <- replicateM(mkReg(0));
+    PulseWire clearCounters <- mkPulseWire;
+    Reg#(Bit#(32)) snapshotSequence <- mkReg(0);
+    rule countEvents;
+        clock <= clock + 1;
+        for (Integer i=0; i<12; i=i+1)
+            counts[i] <= clearCounters ? 0 : counts[i] + (hits[i] ? 1 : 0);
+        mac_fifoin_count <= mac_fifoin_count + (hits[0] ? 1 : 0) - (hits[7] ? 1 : 0);
     endrule
-
-    rule highMacHandShake;
-        highMacRxRespQ.deq;
+    rule countCrc (phyStatusWire.fcsEn && !phyStatusWire.fcsCorrect); hits[11].send; endrule
+    Bool cfgQueuesIdle = dcfStateReg == DCF_IDLE && backOffFsm.available
+        && !highMacTxReqQ.notEmpty && !innerhighMacTxReqQ.notEmpty
+        && !lowMacTxReqQ.notEmpty && !lowMacRxReqQ.notEmpty
+        && !lowMacRxYesToMEReqQ.notEmpty && !lowMacRxNotToMEReqQ.notEmpty
+        && phyStatusWire.state == PHY_IDLE && !phyStatusWire.cca
+        && !backOffFsm.navctrl.isNavWaiting;
+    rule trackConfigQuiet;
+        if (!cfgQueuesIdle) cfgQuietUs <= 0;
+        else if (usGen.get && cfgQuietUs < macCfgReg.timeout) cfgQuietUs <= cfgQuietUs + 1;
     endrule
-
-    (* descending_urgency = "dcfFsmIdle, rxRegcopy" *)
-    (* descending_urgency = "updateNAV, rxRegcopy" *)
-    //区分目的地址是否指向自己
-    rule rxRegcopy if(lowMacRxReqQ.notEmpty);
-        let rxReq = lowMacRxReqQ.first;
-        rxReq.status = True;
-        if(lowMacRxYesToMEReqQ.notFull) begin
-            lowMacRxYesToMEReqQ.enq(rxReq);
-        end
-        if(lowMacRxNotToMEReqQ.notFull && !isMyFrame(id, rxReq.dstMacId)) begin
-            lowMacRxNotToMEReqQ.enq(rxReq);
-        end
-        lowMacRxReqQ.deq;
-        lowMacRxRespQ.enq(GenericResp{});
-    endrule
-
-    (* descending_urgency = "txRegcopy, rxRegcopy" *)    
+    Bool cfgCanApply = cfgQueuesIdle && (nextTaskReg == NT_IDLE ||
+        (nextTaskReg == NT_RECV_DATA && cfgQuietUs >= macCfgReg.timeout));
+    rule phyHandShake; lowMacTxRespQ.deq; endrule
+    rule highMacHandShake; highMacRxRespQ.deq; endrule
     rule txRegcopy;
-        if(highMacTxReqQ.notEmpty && innerhighMacTxReqQ.notFull) begin
-            let txReq = highMacTxReqQ.first;
-            highMacTxReqQ.deq;
-            innerhighMacTxReqQ.enq(txReq);
-            if(countDeltaWire == 0) mac_fifoin_count <= mac_fifoin_count + 1;
-        end else begin
-            if(countDeltaWire < 0) mac_fifoin_count <= mac_fifoin_count - 1;
-        end
+        let f = highMacTxReqQ.first; highMacTxReqQ.deq;
+        innerhighMacTxReqQ.enq(f); hits[0].send;
     endrule
-
-
+    rule rxRegcopy;
+        let f = lowMacRxReqQ.first;
+        if (f.status) begin
+            if (isMyFrame(id, f.dstMacId)) lowMacRxYesToMEReqQ.enq(f);
+            else lowMacRxNotToMEReqQ.enq(f);
+        end
+        lowMacRxReqQ.deq; lowMacRxRespQ.enq(GenericResp{});
+    endrule
     rule updateNAV;
-        if(lowMacRxNotToMEReqQ.notEmpty) begin
-            let rxReq = lowMacRxNotToMEReqQ.first;
-            // if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)|| isDataFrame(rxReq.mpduDigest)) begin
-            if (macCfgReg.navEn == True) begin
-                if(isRtsFrame(rxReq.mpduDigest) || isCtsFrame(rxReq.mpduDigest)) begin
-                    backOffFsm.navctrl.handleFrame(rxReq);       //新增nav逻辑
-                    $display("[%8d ns] update nav in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
-                end
+        let f = lowMacRxNotToMEReqQ.first; lowMacRxNotToMEReqQ.deq;
+        if (isRtsFrame(f.mpduDigest) || isCtsFrame(f.mpduDigest) || isDataFrame(f.mpduDigest))
+            backOffFsm.navctrl.handleFrame(toMacEvent(f));
+    endrule
+    (* descending_urgency = "dcfFsmIdle, trackConfigQuiet" *)
+    rule dcfFsmIdle (dcfStateReg == DCF_IDLE && backOffFsm.available &&
+        (lowMacRxYesToMEReqQ.notEmpty || (innerhighMacTxReqQ.notEmpty && nextTaskReg != NT_RECV_DATA) ||
+        (nextTaskReg == NT_RECV_DATA && cfgQuietUs >= macCfgReg.timeout)));
+        if (lowMacRxYesToMEReqQ.notEmpty) begin
+            let f = lowMacRxYesToMEReqQ.first;
+            if (isDataFrame(f.mpduDigest) || isRtsFrame(f.mpduDigest)) begin
+                nextTaskReg <= isDataFrame(f.mpduDigest) ? NT_SEND_ACK : NT_SEND_CTS;
+                dcfStateReg <= DCF_WAIT_BACKOFF; backOffFsm.start(tuple2(True, False));
+                if (isDataFrame(f.mpduDigest)) begin highMacRxReqQ.enq(toMacEvent(f)); hits[8].send; end
             end
-            lowMacRxNotToMEReqQ.deq;
+            else begin lowMacRxYesToMEReqQ.deq; hits[9].send; end
+        end
+        else if (innerhighMacTxReqQ.notEmpty && nextTaskReg != NT_RECV_DATA) begin
+            let f = innerhighMacTxReqQ.first;
+            Bool afterCts = nextTaskReg == NT_SEND_DATA;
+            backOffFsm.start(tuple2(afterCts, !afterCts));
+            nextTaskReg <= !afterCts && f.mpduDigest.length > macCfgReg.rtsThreshold ? NT_SEND_RTS : NT_SEND_DATA;
+            dcfStateReg <= DCF_WAIT_BACKOFF;
+            lasthighMacTxReq <= f;
+            reservedRts <= rtsDuration(f, macCfgReg);
+            if (!afterCts) exchangeId <= exchangeId + 1;
+        end
+        else if (nextTaskReg == NT_RECV_DATA && cfgQuietUs >= macCfgReg.timeout) nextTaskReg <= NT_IDLE;
+    endrule
+    // A frame addressed to this node can arrive while it contends. Suspend our
+    // own attempt and serve its SIFS response; retry the queued attempt later.
+    rule interruptBackoff (dcfStateReg == DCF_WAIT_BACKOFF &&
+        (nextTaskReg == NT_SEND_RTS || nextTaskReg == NT_SEND_DATA) && !backOffFsm.done);
+        let f = lowMacRxYesToMEReqQ.first;
+        if (isDataFrame(f.mpduDigest) || isRtsFrame(f.mpduDigest)) begin
+            backOffFsm.suspendContention; dcfStateReg <= DCF_IDLE; nextTaskReg <= NT_IDLE;
+        end
+        else begin lowMacRxYesToMEReqQ.deq; hits[9].send; end
+    endrule
+    rule dcfWaitBackOff (dcfStateReg == DCF_WAIT_BACKOFF && backOffFsm.done);
+        if (nextTaskReg == NT_SEND_RTS || nextTaskReg == NT_SEND_DATA) begin
+            let f = innerhighMacTxReqQ.first;
+            if (nextTaskReg == NT_SEND_RTS) begin
+                f = setRtsFrame(f); f.rfParam.mcs = macCfgReg.controlMcs;
+                f.mpduDigest.duration = reservedRts; nextTaskReg <= NT_RECV_CTS; hits[2].send;
+            end
+            else begin f.mpduDigest.duration = dataDuration(macCfgReg); nextTaskReg <= NT_RECV_ACK; hits[1].send; end
+            lowMacTxReqQ.enq(toAirFrame(f, exchangeId));
+            responseStage <= RESP_TX; dcfStateReg <= DCF_RECV_CTSACK;
+        end
+        else begin
+            let air = lowMacRxYesToMEReqQ.first; lowMacRxYesToMEReqQ.deq;
+            let f = toMacEvent(air); f.rfParam.power = lasthighMacTxReq.rfParam.power;
+            if (nextTaskReg == NT_SEND_CTS) begin
+                f = setCtsFrame(id, f); f.mpduDigest.duration = ctsDuration(f.mpduDigest.duration, macCfgReg);
+                nextTaskReg <= NT_RECV_DATA;
+            end
+            else begin f = setAckFrame(id, f); f.mpduDigest.duration = 0; nextTaskReg <= NT_IDLE; end
+            f.rfParam.mcs = macCfgReg.controlMcs;
+            lowMacTxReqQ.enq(toAirFrame(f, air.exchangeId)); dcfStateReg <= DCF_IDLE;
         end
     endrule
-
-        rule dcfFsmIdle if (dcfStateReg == DCF_IDLE);
-            let nextTask = nextTaskReg;
-            let state = DCF_IDLE;
-            ackTimeoutCountReg <= 0;
-            // Phy->lowMac接收队列非空, 进入接收处理逻辑
+    function Bool matchesResponse(AirFrame f);
+        return f.dstMacId == fromInteger(id) && f.srcMacId == lasthighMacTxReq.dstMacId
+            && f.exchangeId == exchangeId && f.mpduDigest.cacheAddr == lasthighMacTxReq.mpduDigest.cacheAddr
+            && ((nextTaskReg == NT_RECV_CTS && isCtsFrame(f.mpduDigest)) ||
+                (nextTaskReg == NT_RECV_ACK && isAckFrame(f.mpduDigest)));
+    endfunction
+    rule dcfRecvCtsAck (dcfStateReg == DCF_RECV_CTSACK);
+        Bool completed = False;
+        Bool failed = responseStage != RESP_TX && timeReached(clock, deadline);
+        if (responseStage == RESP_TX) begin
+            if (phyStatusWire.txEnd && phyStatusWire.txExchangeId == exchangeId) begin
+                responseStage <= RESP_START;
+                deadline <= clock + zeroExtend(unpack(macCfgReg.timeout)) * fromInteger(valueOf(US_CYCLES));
+            end
+        end
+        else begin
+            if (responseStage == RESP_START && !timeReached(clock,deadline+1) && phyStatusWire.rxStart && matchesResponse(phyStatusWire.rxStartFrame)) begin
+                responseStage <= RESP_HEADER; failed = False;
+                deadline <= clock + 21 * fromInteger(valueOf(US_CYCLES));
+            end
+            if (responseStage == RESP_HEADER && !timeReached(clock,deadline+1) && phyStatusWire.rxHeader && matchesResponse(phyStatusWire.rxFrame)) begin
+                responseStage <= RESP_COMPLETE; failed = False;
+                // Full-frame bound includes decode pipeline and queue latency.
+                deadline <= clock + symbolsToCycles(ofdmSymbols(phyStatusWire.rxFrame.mpduDigest.length,
+                    phyStatusWire.rxFrame.rfParam.mcs)) + 64;
+            end
             if (lowMacRxYesToMEReqQ.notEmpty) begin
-                // $display("lowMacRxYesToMEReqQ.notEmpty");
-                let rxReq = lowMacRxYesToMEReqQ.first;
-                if (isMyFrame(id, rxReq.dstMacId) && isDataFrame(rxReq.mpduDigest)) begin
-                    // 收到Data帧，需要回复ACK，先退避SIFS
-                    nextTask = NT_SEND_ACK;
-                    state = DCF_WAIT_BACKOFF;
-                    backOffFsm.start(tuple2(True, False)); //SIFS 
-                    rxReq.status = True;
-                    highMacRxReqQ.enq(rxReq);
-                    $display("[%8d ns] recv data pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,rxReq.dstMacId);
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive DATA", id));
-                end
-                else if (isMyFrame(id, rxReq.dstMacId) && isRtsFrame(rxReq.mpduDigest)) begin
-                    // 收到RTS帧，需要回复CTS，先退避SIFS
-                    nextTask = NT_SEND_CTS;
-                    state = DCF_WAIT_BACKOFF;
-                    backOffFsm.start(tuple2(True, False)); //SIFS 
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive RTS", id));
-                end 
-                else begin
-                    // 直接丢弃
-                    lowMacRxYesToMEReqQ.deq;
-                    // $display("throw pkt in mac layer, my mac id is %d, dst mac id is %d", id,rxReq.dstMacId);
-                    // lowMacRxRespQ.enq(GenericResp{});
-                    // else do nothing.
-                end
-            end
-            // highMac->lowMac发送队列非空，进入发送处理逻辑，可能需要发送Data或者RTS
-            else if (innerhighMacTxReqQ.notEmpty) begin
-                // if (backOffFsm.available) begin
-                    if (nextTaskReg == NT_IDLE) begin
-                    // 一次新的发送/重传
-                        backOffFsm.start(tuple2(False, True)); //DIFS and expBackOff
-                        let txReq = innerhighMacTxReqQ.first;
-                        // 长帧使用RTS
-                        if (txReq.mpduDigest.length > macCfgReg.rtsThreshold) begin
-                            nextTask = NT_SEND_RTS;
-                        end
-                        else begin
-                            nextTask = NT_SEND_DATA;
-                            ctsTimeoutCountReg <= 0;
-                        end
-                        state = DCF_WAIT_BACKOFF;
-                    end
-                    else if (nextTaskReg == NT_SEND_DATA) begin
-                    // 发送了RTS，已经收到了CTS
-                        backOffFsm.start(tuple2(True, False)); //SIFS
-                        nextTask = NT_SEND_DATA;
-                        // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, CTS SIFS", id));
-                        state = DCF_WAIT_BACKOFF;
-                    end
+                let f = lowMacRxYesToMEReqQ.first; lowMacRxYesToMEReqQ.deq;
+                if (responseStage == RESP_COMPLETE && !failed && matchesResponse(f)) begin
+                    completed = True; dcfStateReg <= DCF_IDLE;
+                    if (nextTaskReg == NT_RECV_CTS) nextTaskReg <= NT_SEND_DATA;
                     else begin
-                    // nextTaskReg为残留值(如NT_RECV_DATA)且RX队列为空：
-                    // 不启动退避，丢弃残留任务回到IDLE，避免无退避进入WAIT_BACKOFF造成死锁
-                        nextTask = NT_IDLE;
-                        state = DCF_IDLE;
+                        nextTaskReg <= NT_IDLE; retransCountReg <= 0; backOffFsm.resetCW;
+                        innerhighMacTxReqQ.deq; highMacTxRespQ.enq(GenericResp{}); hits[3].send; hits[7].send;
                     end
-                // end
-                // else do nothing
-            end
-            // else do nothing     
-            nextTaskReg <= nextTask;
-            dcfStateReg  <= state;
-        endrule
-
-        // Reg#(UInt#(64)) cycleCount <- mkReg(0);
-        // rule updateclock;
-        //     cycleCount <= cycleCount + 1;
-        // endrule
-
-        // 更新下发参考值
-        rule updateCtlFramPower(dcfStateReg == DCF_IDLE && innerhighMacTxReqQ.notEmpty);
-            begin
-            lasthighMacTxReq <= innerhighMacTxReqQ.first;
-            // immLog("mkMacDcf", "updatepower", $format("Id %5d, update power:%d", id, lasthighMacTxReq.rfParam.power));
-            end
-        endrule
-
-        // 等待退避机制结束
-        rule dcfWaitBackOff if (dcfStateReg == DCF_WAIT_BACKOFF);
-            if (backOffFsm.done) begin
-                case (nextTaskReg)
-                NT_SEND_RTS: begin
-                    // 第一次BackOff，发送RTS帧
-                    // BUG-B fix: 发起自己发送前, 丢弃队头残留的迟到 CTS/ACK
-                    if (lowMacRxYesToMEReqQ.notEmpty) begin
-                        let staleRx = lowMacRxYesToMEReqQ.first;
-                        if (isCtsFrame(staleRx.mpduDigest) || isAckFrame(staleRx.mpduDigest)) begin
-                            lowMacRxYesToMEReqQ.deq;
-                            immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Drop stale CTS/ACK before send RTS", id));
-                        end
-                    end
-                    let refFrame = innerhighMacTxReqQ.first;
-                    let rtsFrame = setRtsFrame(refFrame);//隐藏条件，用refFrame中的NAV数值
-                    lowMacTxReqQ.enq(rtsFrame);
-                    dcfStateReg <= DCF_RECV_CTSACK;
-                    nextTaskReg <= NT_RECV_CTS;
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send RTS", id));
-                    $display("[%8d ns] send rts pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
-                    ctsTimeoutCountReg <= 0;
-                    end
-                NT_SEND_DATA: begin
-                    if(ctsTimeoutCountReg >= macCfgReg.timeout) begin
-                        dcfStateReg <= DCF_IDLE;
-                        nextTaskReg <= NT_IDLE;
-                        if (retransCountReg < macCfgReg.retryLimit) begin
-                            retransCountReg <= retransCountReg + 1;
-                            backOffFsm.incrCW;  // 失败后增大退避窗口
-                            immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit in send data duration", id));
-                        end 
-                        // 超过重试次数，发送失败
-                        else begin
-                            retransCountReg <= 0;
-                            backOffFsm.resetCW;  // 重置窗口
-                            innerhighMacTxReqQ.deq;
-                            countDeltaWire <= -1;
-                            let txReq = innerhighMacTxReqQ.first;
-                            // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
-                            txReq.status = False;
-                            // highMacRxReqQ.enq(txReq);
-                        end
-                    end
-                    else begin
-                    // 已经收到过CTS，或者无需RTS/CRS, 发送Data
-                        // BUG-B fix: 发DATA前, 丢弃队头残留的迟到 CTS/ACK
-                        if (lowMacRxYesToMEReqQ.notEmpty) begin
-                            let staleRx = lowMacRxYesToMEReqQ.first;
-                            if (isCtsFrame(staleRx.mpduDigest) || isAckFrame(staleRx.mpduDigest)) begin
-                                lowMacRxYesToMEReqQ.deq;
-                                immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Drop stale CTS/ACK before send DATA", id));
-                            end
-                        end
-                        let refFrame = innerhighMacTxReqQ.first;
-                        refFrame.mpduDigest.duration = macCfgReg.sifs+ fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(ACK_MPDU_TIME_us));//待完善 10： SIFS; 48: synctime;  20: acktime
-                        lowMacTxReqQ.enq(refFrame);
-                        dcfStateReg <= DCF_RECV_CTSACK;
-                        nextTaskReg <= NT_RECV_ACK;
-                        // immLog("mkMacDcf", "dcfFSM", $format("[%8d ns] Id %5d, Send Data", id, id));
-                        $display("[%8d ns] send data pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
-                    end
-                    ctsTimeoutCountReg <= 0;
                 end
-                NT_SEND_CTS: begin
-                    // 回复CTS
-                    let refFrame = lowMacRxYesToMEReqQ.first;
-                    refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
-                    refFrame.mpduDigest.duration = (refFrame.mpduDigest.duration > (macCfgReg.sifs + fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(RTS_MPDU_TIME_us)))) ? refFrame.mpduDigest.duration - (macCfgReg.sifs + fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(RTS_MPDU_TIME_us))) : 0;
-                    lowMacRxYesToMEReqQ.deq;
-                    // lowMacRxRespQ.enq(GenericResp{});
-                    let ctsFrame = setCtsFrame(id, refFrame);
-                    lowMacTxReqQ.enq(ctsFrame);
-                    dcfStateReg <= DCF_IDLE;
-                    nextTaskReg <= NT_RECV_DATA;
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send CTS", id));
-                    $display("[%8d ns] send cts pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,ctsFrame.dstMacId);
-                end
-                NT_SEND_ACK: begin
-                    // 回复ACK
-                    if(lowMacRxYesToMEReqQ.notEmpty) begin
-                        let refFrame = lowMacRxYesToMEReqQ.first;
-                        refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
-                        refFrame.mpduDigest.duration = 0;
-                        lowMacRxYesToMEReqQ.deq;
-                        // lowMacRxRespQ.enq(GenericResp{});
-                        let ackFrame = setAckFrame(id, refFrame);
-                        lowMacTxReqQ.enq(ackFrame);
-                        dcfStateReg <= DCF_IDLE;
-                        nextTaskReg <= NT_IDLE;
-                        $display("[%8d ns] send ACK pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id, ackFrame.dstMacId);
-                    end
-                // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send ACK", id));
-                end
-                endcase
-            end 
-            //需要补充逻辑，就算是在非done部分收到发给自己的帧，也需要处理。回idle重新开始
-            else if(ctsTimeoutCountReg != 0)begin
-                if (usGen.get)
-                    ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
+                else hits[9].send;
             end
-        endrule
-
-        // 等待对端反馈
-        rule dcfRecvCtsAck if (dcfStateReg == DCF_RECV_CTSACK);
-            let nextTask = nextTaskReg;
-            let state = dcfStateReg;
-            let ctsCnt = ctsTimeoutCountReg;  // BUG-A fix: 局部累积, 末尾单点写回, 避免同规则双写冲突
-            // if (usGen.get)
-            if(ackTimeoutCountReg == 0)begin
-                if(phyStatusWire.txEnd == True) begin
-                        ackTimeoutCountReg <= ackTimeoutCountReg + 1;
-                        $display("reset ackTimeoutCountReg: %d\n", ackTimeoutCountReg);
-                end
-            end
-            if(ackTimeoutCountReg != 0)begin
-                if (usGen.get)
-                ackTimeoutCountReg <= ackTimeoutCountReg + 1;
-            end
-
-            if(ctsTimeoutCountReg == 0)begin
-                if(phyStatusWire.txEnd == True) begin
-                        ctsCnt = ctsCnt + 1;
-                        $display("reset ctsTimeoutCountReg: %d\n", ctsTimeoutCountReg);
-                end
-            end
-            if(ctsTimeoutCountReg != 0)begin
-                if (usGen.get)
-                ctsCnt = ctsCnt + 1;
-            end
-            
-                // ackTimeoutCountReg <= ackTimeoutCountReg + 1;
-            if (lowMacRxYesToMEReqQ.notEmpty) begin
-                let rxReq = lowMacRxYesToMEReqQ.first;
-                if (isMyFrame(id, rxReq.dstMacId) && isCtsFrame(rxReq.mpduDigest)) begin
-                    // 收到了CTS，准备发送DATA
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive CTS", id));
-                    $display("[%8d ns] recv cts pkt in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
-                    lowMacRxYesToMEReqQ.deq;
-                    // lowMacRxRespQ.enq(GenericResp{});
-                    ctsCnt = 0; // BUG-A fix: RTS->CTS 段结束, DATA->ACK 段由 ackTimeoutCountReg 独立计时
-                    state = DCF_IDLE;
-                    nextTask = NT_SEND_DATA;
-                end
-                else if (isMyFrame(id, rxReq.dstMacId) && isAckFrame(rxReq.mpduDigest)) begin
-                    // 收到了ACK，结束一次发送
-                    // TODO: Block ACK 如何处理？？
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Receive ACK", id));
-                    $display("[%8d ns] recv ACK pkt in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
-                    lowMacRxYesToMEReqQ.deq;
-                    // lowMacRxRespQ.enq(GenericResp{});
-                    backOffFsm.resetCW;  // 重置窗口
-                    nextTask = NT_IDLE;
-                    state = DCF_IDLE;
-                    innerhighMacTxReqQ.deq;
-                    countDeltaWire <= -1;
-                    highMacTxRespQ.enq(GenericResp{});
-                    retransCountReg <= 0;
-                end
+            if (failed && !completed) begin
+                if (nextTaskReg == NT_RECV_CTS) hits[4].send; else hits[5].send;
+                dcfStateReg <= DCF_IDLE; nextTaskReg <= NT_IDLE;
+                if (retransCountReg < macCfgReg.retryLimit) begin retransCountReg <= retransCountReg + 1; backOffFsm.incrCW; end
                 else begin
-                    lowMacRxYesToMEReqQ.deq;
-                    // lowMacRxRespQ.enq(GenericResp{});
-                    // Fix-B: 等待 CTS/ACK 期间只把"发给自己的意外帧"当失败;
-                    // 发往他人的旁听帧仅出队, 保持 RECV_CTSACK 继续等 (失败判据收敛到 timeout,
-                    // 排在其后的合法 CTS/ACK 可正常匹配)
-                    if (isMyFrame(id, rxReq.dstMacId)) begin
-                        if (retransCountReg < macCfgReg.retryLimit) begin
-                            retransCountReg <= retransCountReg + 1;
-                            backOffFsm.incrCW;  // 失败后增大退避窗口
-                            immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
-                            // BUG-B fix: 丢弃帧后退出 RECV_CTSACK, 重新竞争信道重传
-                            state = DCF_IDLE;
-                            nextTask = NT_IDLE;
-                        end
-                        // 超过重试次数，发送失败
-                        else begin
-                            retransCountReg <= 0;
-                            backOffFsm.resetCW;  // 重置窗口
-                            innerhighMacTxReqQ.deq;
-                            countDeltaWire <= -1;
-                            let txReq = innerhighMacTxReqQ.first;
-                            txReq.status = False;
-                            state = DCF_IDLE;      // BUG-B fix: 丢弃帧后必须退出本状态
-                            nextTask = NT_IDLE;
-                        end
-                    end
+                    retransCountReg <= 0; backOffFsm.resetCW; innerhighMacTxReqQ.deq;
+                    highMacTxRespQ.enq(GenericResp{}); hits[6].send; hits[7].send;
                 end
             end
-            // CTS/ACK超时，重新进入发送流程
-            else if (ackTimeoutCountReg >= macCfgReg.timeout) begin
-                if (retransCountReg < macCfgReg.retryLimit) begin
-                    retransCountReg <= retransCountReg + 1;
-                    backOffFsm.incrCW;  // 失败后增大退避窗口
-                    immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Timeout, Retransmit", id));
-                    state = DCF_IDLE;
-                    nextTask = NT_IDLE;
-                end 
-                // 超过重试次数，发送失败
-                else begin
-                    retransCountReg <= 0;
-                    backOffFsm.resetCW;  // 重置窗口
-                    state = DCF_IDLE;
-                    nextTask = NT_IDLE;
-                    innerhighMacTxReqQ.deq;
-                    countDeltaWire <= -1;
-                    let txReq = innerhighMacTxReqQ.first;
-                    // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Retransmit Time %d, Drop", id, retransCountReg));
-                    txReq.status = False;
-                    // highMacRxReqQ.enq(txReq);
-                end
-                //更新NAV
+        end
+    endrule
+    rule readMacRegisters (!macRegReqQ.first.writeEnable);
+        let req = macRegReqQ.first; macRegReqQ.deq;
+        RegAccessResp resp = RegAccessResp{readData:0,error:False};
+        case (req.regOffset)
+            mac_slot_time_off: resp.readData = zeroExtend(macCfgReg.slot);
+            mac_sifs_off: resp.readData = zeroExtend(macCfgReg.sifs);
+            mac_difs_off: resp.readData = zeroExtend(macCfgReg.difs);
+            mac_eifs_off: resp.readData = zeroExtend(macCfgReg.eifs);
+            mac_sig_time_off: resp.readData = zeroExtend(macCfgReg.sigTime);
+            mac_ofdm_symbol_off: resp.readData = zeroExtend(macCfgReg.ofdmSymbolTime);
+            mac_max_num_off: resp.readData = zeroExtend(macCfgReg.maxNum);
+            mac_phy_delay_off: resp.readData = zeroExtend(macCfgReg.phyDelayTime);
+            mac_timeout_off: resp.readData = zeroExtend(macCfgReg.timeout);
+            mac_cw_min_off: resp.readData = zeroExtend(macCfgReg.cwMin);
+            mac_cw_max_off: resp.readData = zeroExtend(macCfgReg.cwMax);
+            mac_rts_thresh_off: resp.readData = zeroExtend(macCfgReg.rtsThreshold);
+            mac_retry_limit_off: resp.readData = zeroExtend(macCfgReg.retryLimit);
+            nav_en_h_off: resp.readData = zeroExtend(pack(macCfgReg.navEn));
+            txop_en_h_off: resp.readData = zeroExtend(pack(macCfgReg.txopEn));
+            filter_en_h_off: resp.readData = zeroExtend(pack(macCfgReg.filterEn));
+            mac_backoff_state_off: resp.readData = zeroExtend(pack(backOffFsm.getStatus));
+            mac_dcf_state_off: resp.readData = zeroExtend(pack(dcfStateReg));
+            mac_fifoin_depth_off: resp.readData = fromInteger(valueOf(MAC_FIFOIN_DEPTH));
+            mac_fifoin_count_off: resp.readData = pack(mac_fifoin_count);
+            mac_cfg_generation_off: resp.readData = cfgGeneration;
+            mac_us_cycles_off: resp.readData = fromInteger(valueOf(US_CYCLES));
+            mac_cw_exp_off: resp.readData = zeroExtend(backOffFsm.currentCW);
+            mac_nav_remaining_off: resp.readData = zeroExtend(backOffFsm.navctrl.getNavValue);
+            mac_control_mcs_off: resp.readData = zeroExtend(macCfgReg.controlMcs);
+            mac_backoff_seed_off: resp.readData = zeroExtend(macCfgReg.backoffSeed);
+            mac_diag_version_off: resp.readData = 'h00020000;
+            mac_diag_sequence_off: resp.readData = snapshotSequence;
+            mac_response_stage_off: resp.readData = zeroExtend(pack(responseStage));
+            mac_exchange_id_off: resp.readData = exchangeId;
+            mac_nav_reset_off: resp.readData = 0;
+            mac_diag_command_off: resp.readData = 0;
+            default: begin
+                if (req.regOffset >= mac_diag_base_off && req.regOffset < mac_diag_base_off+48 && req.regOffset[1:0] == 0)
+                    resp.readData=snapshot[(req.regOffset-mac_diag_base_off)>>2];
+                else resp.error=True;
             end
-            ctsTimeoutCountReg <= ctsCnt;
-            dcfStateReg <= state;
-            nextTaskReg <= nextTask;
-        endrule
-
-    // rule handlemacConfig;
-    //     if(macConfigReqQ.notEmpty) begin
-    //         let req = macConfigReqQ.first;
-    //         macConfigReqQ.deq;
-    //         case(req.macReqTag.rwMode)
-    //             MOD_WRITE: begin
-    //                 macCfgReg <= req.macConfig;
-    //                 let resp = getEmptyMacConfigResp();
-    //                 resp.macConfig = req.macConfig;
-    //                 macConfigRespQ.enq(resp);
-    //             end
-    //             MOD_READ: begin
-    //                 let resp = getEmptyMacConfigResp();
-    //                 resp.macConfig = macCfgReg;
-    //                 macConfigRespQ.enq(resp);
-    //             end
-    //         endcase
-    //     end
-    // endrule
-
-    // rule handlemacStatus;
-    //     if(macStatusReqQ.notEmpty) begin
-    //         let req = macStatusReqQ.first;
-    //         macStatusReqQ.deq;
-    //         let resp = getEmptyMacStatusResp();
-    //         resp.dcfState    = dcfStateReg;
-    //         resp.dcfNextTask = nextTaskReg;
-    //         macStatusRespQ.enq(resp);
-    //     end
-    // endrule
+        endcase
+        macRegRespQ.enq(resp);
+    endrule
 
     // 寄存器访问处理规则
+    (* descending_urgency = "handleMacRegAccess, trackConfigQuiet, updateNAV" *)
+    (* descending_urgency = "handleMacRegAccess, backOffFsm.csmaFSM" *)
     (* descending_urgency = "handleMacRegAccess, dcfFsmIdle, dcfWaitBackOff, dcfRecvCtsAck" *)
-    rule handleMacRegAccess;
+    // Stop traffic and drain outstanding exchanges before configuration writes.
+    // Read requests remain available during traffic; a queued write waits for
+    // quiescence. The write response means all consumers have applied the value.
+    rule handleMacRegAccess (macRegReqQ.first.writeEnable && (cfgCanApply || macRegReqQ.first.regOffset == mac_diag_command_off || (macRegReqQ.first.regOffset == mac_nav_reset_off && dcfStateReg == DCF_IDLE)));
         let req = macRegReqQ.first;
         macRegReqQ.deq;
         RegAccessResp resp = RegAccessResp{readData: 0, error: False};
+
+        MacConfig nextCfg = macCfgReg;
+        Bool writable = False;
+        Bit#(32) maxWrite = 65535;
 
         // 寄存器访问逻辑
         case (req.regOffset)
             // MAC 配置寄存器 (可修改)
             mac_slot_time_off: begin
-                if (req.writeEnable) macCfgReg.slot <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.slot = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.slot);
             end
             mac_sifs_off: begin
-                if (req.writeEnable) macCfgReg.sifs <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.sifs = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.sifs);
             end
             mac_difs_off: begin
-                if (req.writeEnable) macCfgReg.difs <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.difs = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.difs);
             end
             mac_eifs_off: begin
-                if (req.writeEnable) macCfgReg.eifs <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.eifs = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.eifs);
             end
             mac_sig_time_off: begin
-                if (req.writeEnable) macCfgReg.sigTime <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.sigTime = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.sigTime);
             end
             mac_ofdm_symbol_off: begin
-                if (req.writeEnable) macCfgReg.ofdmSymbolTime <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.ofdmSymbolTime = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.ofdmSymbolTime);
             end
             mac_max_num_off: begin
-                if (req.writeEnable) macCfgReg.maxNum <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.maxNum = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.maxNum);
             end
             mac_phy_delay_off: begin
-                if (req.writeEnable) macCfgReg.phyDelayTime <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.phyDelayTime = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.phyDelayTime);
             end
             mac_timeout_off: begin
-                if (req.writeEnable) macCfgReg.timeout <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.timeout = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.timeout);
             end
             mac_cw_min_off: begin
-                if (req.writeEnable) macCfgReg.cwMin <= truncate(req.writeData);
+                writable = True; maxWrite = 10;
+                if (req.writeEnable) nextCfg.cwMin = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.cwMin);
             end
             mac_cw_max_off: begin
-                if (req.writeEnable) macCfgReg.cwMax <= truncate(req.writeData);
+                writable = True; maxWrite = 10;
+                if (req.writeEnable) nextCfg.cwMax = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.cwMax);
             end
             mac_rts_thresh_off: begin
-                if (req.writeEnable) macCfgReg.rtsThreshold <= truncate(req.writeData);
+                writable = True; maxWrite = 65535;
+                if (req.writeEnable) nextCfg.rtsThreshold = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.rtsThreshold);
             end
             mac_retry_limit_off: begin
-                if (req.writeEnable) macCfgReg.retryLimit <= truncate(req.writeData);
+                writable = True; maxWrite = 15;
+                if (req.writeEnable) nextCfg.retryLimit = truncate(req.writeData);
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.retryLimit);
             end
             nav_en_h_off: begin
-                if (req.writeEnable) macCfgReg.navEn <= unpack(truncate(req.writeData[0]));
+                writable = True; maxWrite = 1;
+                if (req.writeEnable) nextCfg.navEn = unpack(truncate(req.writeData[0]));
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.navEn));
-                $display("wawawa update nav, myid is %d", id);
+
             end
             txop_en_h_off: begin
-                if (req.writeEnable) macCfgReg.txopEn <= unpack(truncate(req.writeData[0]));
+                writable = True; maxWrite = 1;
+                if (req.writeEnable) nextCfg.txopEn = unpack(truncate(req.writeData[0]));
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.txopEn));
             end
             filter_en_h_off: begin
-                if (req.writeEnable) macCfgReg.filterEn <= unpack(truncate(req.writeData[0]));
+                writable = True; maxWrite = 1;
+                if (req.writeEnable) nextCfg.filterEn = unpack(truncate(req.writeData[0]));
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.filterEn));
             end
             
             // MAC 状态寄存器 (仅查询)
             mac_backoff_state_off: begin
-                resp.readData = zeroExtend(pack(macStaReg.backOffState));
+                resp.readData = zeroExtend(pack(backOffFsm.getStatus));
             end
             mac_dcf_state_off: begin
                 resp.readData = zeroExtend(pack(dcfStateReg));
@@ -891,12 +532,57 @@ module mkMacDCF#(Integer id)(MacCore);
                 resp.readData = zeroExtend(pack(mac_fifoin_count));
             end
             
+            mac_cfg_generation_off: resp.readData = cfgGeneration;
+            mac_us_cycles_off: resp.readData = fromInteger(valueOf(US_CYCLES));
+            mac_cw_exp_off: resp.readData = zeroExtend(backOffFsm.currentCW);
+            mac_nav_remaining_off: resp.readData = zeroExtend(backOffFsm.navctrl.getNavValue);
+
+            mac_control_mcs_off: begin
+                writable = True; maxWrite = 7;
+                if (req.writeEnable) nextCfg.controlMcs = truncate(req.writeData);
+                resp.readData = zeroExtend(macCfgReg.controlMcs);
+            end
+            mac_backoff_seed_off: begin
+                writable = True;
+                if (req.writeEnable) nextCfg.backoffSeed = truncate(req.writeData);
+                resp.readData = zeroExtend(macCfgReg.backoffSeed);
+            end
+            mac_diag_version_off: resp.readData = 'h00020000;
+            mac_diag_sequence_off: resp.readData = snapshotSequence;
+            mac_response_stage_off: resp.readData = zeroExtend(pack(responseStage));
+            mac_exchange_id_off: resp.readData = exchangeId;
+            mac_nav_reset_off: begin
+                if (req.writeEnable && req.writeData == 1) backOffFsm.navctrl.resetNav;
+                else if (req.writeEnable) resp.error = True;
+            end
+            mac_diag_command_off: begin
+                if (req.writeEnable) begin
+                    if (req.writeData == 1) begin
+                        for (Integer i=0; i<12; i=i+1) snapshot[i] <= counts[i];
+                        snapshotSequence <= snapshotSequence + 1;
+                    end
+                    else if (req.writeData == 2) clearCounters.send;
+                    else resp.error = True;
+                end
+            end
             default: begin
-                resp.error = True;
-                $display("[MacCore:%0d] Invalid register offset: 0x%03h", id, req.regOffset);
+                if (req.regOffset >= mac_diag_base_off && req.regOffset < mac_diag_base_off + 48 && req.regOffset[1:0] == 0)
+                    resp.readData = snapshot[(req.regOffset - mac_diag_base_off) >> 2];
+                else resp.error = True;
+
             end
         endcase
         
+        if (req.writeEnable && req.regOffset != mac_diag_command_off && req.regOffset != mac_nav_reset_off) begin
+            resp.error = resp.error || !writable || req.writeData > maxWrite
+                || nextCfg.slot == 0 || nextCfg.cwMin > nextCfg.cwMax
+                || nextCfg.cwMax > 10 || nextCfg.backoffSeed == 0 || nextCfg.timeout == 0;
+            if (!resp.error) begin
+                macCfgReg <= nextCfg;
+                backOffFsm.putmaccfg.put(nextCfg);
+                cfgGeneration <= cfgGeneration + 1;
+            end
+        end
         macRegRespQ.enq(resp);
     endrule
 

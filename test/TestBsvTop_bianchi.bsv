@@ -11,7 +11,7 @@
 // 帧口径: MPDU=1536B = 1500 payload + 24 MAC + 8 LLC/SNAP + 4 FCS
 //       (ns-3 PacketSocketClient 直接发 1500B, 无 IP/UDP 头)
 // 统计: 每 20ms 窗口收包数 N -> 应用吞吐 = N*1500*8/T (对照 ns-3 口径)
-// 时标: 200 cycles/us
+// 时标: US_CYCLES cycles/us（当前 250）
 // ============================================================================
 
 import GetPut::*;
@@ -142,7 +142,7 @@ module mkTestRawEmuCore_bianchi(Empty);
     endrule
 
     rule openLog (cycleCount == 10);
-        let fd <- $fopen("/home/gtx/dev/RealEmu/scripts/bianchi_mcs7.txt", "w");
+        let fd <- $fopen("bianchi_mcs7.txt", "w");
         logFile <= fd;
     endrule
 
@@ -218,7 +218,7 @@ module mkTestRawEmuCore_bianchi(Empty);
                     cfgIdx <= 0;
                     $display("[BIANCHI] cfg done: timeout=%0d cwExp[%0d,%0d] retry=%0d rtsTh=off",
                              toVal, cwMinExp, cwMaxExp, retryLim);
-                    stageEndCycle <= cycleCount + fromInteger(stageUs * 200);
+                    stageEndCycle <= cycleCount + fromInteger(stageUs * valueOf(US_CYCLES));
                     stage <= 0;
                     phase <= PH_RUN;
                 end else begin
@@ -248,7 +248,7 @@ module mkTestRawEmuCore_bianchi(Empty);
                 if (cfgIdx + 1 == fromInteger(valueOf(TEST_NODE_NUM))) begin
                     cfgIdx <= 0;
                     $display("[BIANCHI] rtsThreshold switched to ON (%0d)", rtsThOn);
-                    stageEndCycle <= cycleCount + fromInteger(stageUs * 200);
+                    stageEndCycle <= cycleCount + fromInteger(stageUs * valueOf(US_CYCLES));
                     phase <= PH_RUN;
                 end else begin
                     cfgIdx <= cfgIdx + 1;
@@ -262,7 +262,7 @@ module mkTestRawEmuCore_bianchi(Empty);
             // 发送: 节点 1..7, 每 1ms 错开 1us (cycleCount 低 10 位 = 节点号)
             for (Integer n = 1; n < valueOf(TEST_NODE_NUM); n = n + 1) begin
                 if (fromInteger(n) <= activeSendersOf(stage)
-                    && cycleCount % fromInteger(sendDeltaUs * 200) == fromInteger(n)) begin
+                    && cycleCount % fromInteger(sendDeltaUs * valueOf(US_CYCLES)) == fromInteger(n)) begin
                     let txReq = getEmptyMacEvent;
                     txReq.srcMacId = fromInteger(n);
                     txReq.dstMacId = 0;
@@ -296,7 +296,7 @@ module mkTestRawEmuCore_bianchi(Empty);
                     phase <= PH_DONE;
                 end else begin
                     stage <= stage + 1;
-                    stageEndCycle <= cycleCount + fromInteger(stageUs * 200);
+                    stageEndCycle <= cycleCount + fromInteger(stageUs * valueOf(US_CYCLES));
                     if (stage == 5) begin
                         cfgIdx <= 0;
                         phase <= PH_RTS0;

@@ -14,7 +14,7 @@
 //   => aggregate goodput = 去重后包数 * 1000B * 8 / 窗口
 // 档位: RTS off (N=1,2,4,7) -> RTS on (N=1,2,4,7), 共 8 档
 //   每档 20ms 统计窗 + 8ms 冷却(清队列/退避, 防跨档污染)
-// 时标: 200 cycles/us
+// 时标: US_CYCLES cycles/us（当前 250）
 // ============================================================================
 
 import GetPut::*;
@@ -136,7 +136,7 @@ module mkTestRawEmuCore_hidden_v2(Empty);
     endrule
 
     rule openLog (cycleCount == 10);
-        let fd <- $fopen("/home/gtx/dev/RealEmu/scripts/hidden_v2.txt", "w");
+        let fd <- $fopen("hidden_v2.txt", "w");
         logFile <= fd;
     endrule
 
@@ -261,7 +261,7 @@ module mkTestRawEmuCore_hidden_v2(Empty);
                     cfgIdx <= 0;
                     $display("[HT] cfg done: cwExp[%0d,%0d] retry=%0d rtsTh=off",
                              cwMinExp, cwMaxExp, retryLim);
-                    stageEndCycle <= cycleCount + fromInteger(stageUs * 200);
+                    stageEndCycle <= cycleCount + fromInteger(stageUs * valueOf(US_CYCLES));
                     stage <= 0;
                     phase <= PH_RUN;
                 end else begin
@@ -291,7 +291,7 @@ module mkTestRawEmuCore_hidden_v2(Empty);
                 if (cfgIdx + 1 == fromInteger(valueOf(TEST_NODE_NUM))) begin
                     cfgIdx <= 0;
                     $display("[HT] rtsThreshold switched to ON (%0d)", rtsThOn);
-                    stageEndCycle <= cycleCount + fromInteger(stageUs * 200);
+                    stageEndCycle <= cycleCount + fromInteger(stageUs * valueOf(US_CYCLES));
                     phase <= PH_RUN;
                 end else begin
                     cfgIdx <= cfgIdx + 1;
@@ -303,7 +303,7 @@ module mkTestRawEmuCore_hidden_v2(Empty);
         // ---------- 档间冷却 ----------
         PH_COOL: begin
             if (cycleCount >= stageEndCycle) begin
-                stageEndCycle <= cycleCount + fromInteger(stageUs * 200);
+                stageEndCycle <= cycleCount + fromInteger(stageUs * valueOf(US_CYCLES));
                 phase <= PH_RUN;
             end
         end
@@ -313,7 +313,7 @@ module mkTestRawEmuCore_hidden_v2(Empty);
             // 发送: 节点 1..7, 每 1ms 错开 1us
             for (Integer n = 1; n < valueOf(TEST_NODE_NUM); n = n + 1) begin
                 if (fromInteger(n) <= activeSendersOf(stage)
-                    && cycleCount % fromInteger(sendDeltaUs * 200) == fromInteger(n)) begin
+                    && cycleCount % fromInteger(sendDeltaUs * valueOf(US_CYCLES)) == fromInteger(n)) begin
                     let txReq = getEmptyMacEvent;
                     txReq.srcMacId = fromInteger(n);
                     txReq.dstMacId = 0;
@@ -350,7 +350,7 @@ module mkTestRawEmuCore_hidden_v2(Empty);
                     phase <= PH_DONE;
                 end else begin
                     stage <= stage + 1;
-                    stageEndCycle <= cycleCount + fromInteger(coolUs * 200);
+                    stageEndCycle <= cycleCount + fromInteger(coolUs * valueOf(US_CYCLES));
                     if (stage == 3) begin
                         cfgIdx <= 0;
                         phase <= PH_RTS0;    // stage 3 结束: 切 RTS on, 无冷却

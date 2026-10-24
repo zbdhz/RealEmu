@@ -19,6 +19,7 @@ typedef 100 TestNum;
 
 function PhyEvent getEmptyPhyEvent();
         return PhyEvent {
+            exchangeId: 0,
             srcPhyId: 0,
             dstPhyId: 0,
             rfParam: RfParam { power: 2000, mcs: 0 },

@@ -104,6 +104,8 @@ typedef struct {
     Bool            navEn;
     Bool            txopEn;
     Bool            filterEn;
+    Mcs             controlMcs;
+    Bit#(16)        backoffSeed;
 }MacConfig deriving(Eq, Bits, Bounded, FShow);
 
 function MacConfig getDefaultMacCfg();
@@ -124,10 +126,12 @@ function MacConfig getDefaultMacCfg();
         // exp value
         cwMin: 4,  //15
         // cwMax: 10, //1023
-        cwMax: 6, //1023
+        cwMax: 6, //63 (exponent, configurable up to 10)
         // enable
         filterEn: True,
         txopEn: False, // not supported yet
+        controlMcs: 0,
+        backoffSeed: 1,
         navEn: True
     };
 endfunction
@@ -242,7 +246,29 @@ typedef struct {
 typedef Server#(MacEvent, GenericResp) MacSrv;
 typedef Client#(MacEvent, GenericResp) MacClt;
 
-typedef 200 US_CYCLES;
+// Internal MAC/PHY metadata. MacEvent and the host DMA bit layout stay unchanged.
+typedef struct {
+    MacId srcMacId;
+    MacId dstMacId;
+    RfParam rfParam;
+    MpduDigest mpduDigest;
+    Bool status;
+    Bit#(32) exchangeId;
+} AirFrame deriving(Eq, Bits, Bounded, FShow);
+function AirFrame toAirFrame(MacEvent f, Bit#(32) tag);
+    return AirFrame {srcMacId:f.srcMacId, dstMacId:f.dstMacId,
+        rfParam:f.rfParam, mpduDigest:f.mpduDigest, status:f.status, exchangeId:tag};
+endfunction
+function MacEvent toMacEvent(AirFrame f);
+    return MacEvent {srcMacId:f.srcMacId, dstMacId:f.dstMacId,
+        rfParam:f.rfParam, mpduDigest:f.mpduDigest, status:f.status};
+endfunction
+typedef Server#(AirFrame, GenericResp) AirSrv;
+typedef Client#(AirFrame, GenericResp) AirClt;
+
+// Single timebase for MAC, PHY and testbenches. The XDMA user_clk is 250 MHz.
+// Bluesim uses the same cycle counts; $time is simulator time, not protocol us.
+typedef 250 US_CYCLES;
 
 
 // ========================================= Phy Types ====================================
@@ -270,6 +296,10 @@ typedef struct {
     Bool txEnd;
     Bool rxStart;
     Bool rxEnd;
+    Bool rxHeader; // Valid PLCP header, distinct from raw synchronization start.
+    AirFrame rxFrame; // Identity associated with header/completion events.
+    AirFrame rxStartFrame; // Independent identity for a concurrent new sync.
+    Bit#(32) txExchangeId;
     PhyFsmState state;
 }PhyStatus deriving(Eq, Bits, Bounded, FShow);
 
@@ -286,6 +316,7 @@ typedef struct {
     PhyId dstPhyId;
     RfParam rfParam;
     PpduLen ppduLen;
+    Bit#(32) exchangeId;
     MpduDigest mpduDigest;
 }PhyEvent deriving(Eq, Bits, Bounded, FShow);
 
@@ -294,7 +325,8 @@ function PhyEvent getEmptyPhyEvent();
         srcPhyId  : 0, 
         dstPhyId  : 0, 
         rfParam   : getEmptyRfParam, 
-        ppduLen   : 0, 
+        ppduLen   : 0,
+        exchangeId: 0,
         mpduDigest: getEmptyMpduDigest};
 endfunction
 
@@ -306,7 +338,11 @@ function PhyStatus getEmptyPhyStatus();
         txStart   : False, 
         txEnd     : False, 
         rxStart   : False, 
-        rxEnd     : False, 
+        rxEnd     : False,
+        rxHeader  : False,
+        rxFrame   : toAirFrame(getEmptyMacEvent, 0),
+        rxStartFrame: toAirFrame(getEmptyMacEvent, 0),
+        txExchangeId: 0,
         state     : PHY_IDLE};
 endfunction
 
@@ -487,6 +523,10 @@ RegOffset mac_backoff_state_off  = 'h_040;    // Backoff state
 RegOffset mac_dcf_state_off      = 'h_044;    // DCF state
 RegOffset mac_fifoin_depth_off   = 'h_048;    // FIFO in depth
 RegOffset mac_fifoin_count_off   = 'h_04C;    // FIFO in count
+RegOffset mac_cfg_generation_off = 'h_050;   // Accepted configuration writes
+RegOffset mac_us_cycles_off      = 'h_054;   // Core cycles per protocol microsecond
+RegOffset mac_cw_exp_off         = 'h_058;   // Actual current backoff exponent
+RegOffset mac_nav_remaining_off  = 'h_05C;   // Actual NAV remaining (us)
 
 
 // ========================================= PHY 寄存器偏移定义 ====================================
@@ -509,3 +549,28 @@ typedef TDiv#(DATA_WIDTH, BYTE_WIDTH) KEEP_WIDTH;
 typedef RawAxiStreamMaster#(KEEP_WIDTH, TUSER_WIDTH) DmaAxiMaster;
 typedef RawAxiStreamSlave#(KEEP_WIDTH, TUSER_WIDTH)  DmaAxiSlave;
 typedef RawAxi4LiteSlave#(AXI_ADDR_WIDTH, TDiv#(AXI_DATA_WIDTH, BYTE_WIDTH)) DmaAxiLiteSlave;
+
+// Diagnostics ABI v2. Counters are unsigned 32-bit, modulo 2^32.
+RegOffset mac_control_mcs_off = 'h060;
+RegOffset mac_backoff_seed_off = 'h064;
+RegOffset mac_diag_version_off = 'h068;
+RegOffset mac_diag_command_off = 'h06C; // write 1=snapshot, 2=clear live counters
+RegOffset mac_diag_sequence_off = 'h070;
+RegOffset mac_response_stage_off = 'h074;
+RegOffset mac_exchange_id_off = 'h078;
+RegOffset mac_nav_reset_off = 'h07C; // write 1, idle MAC only
+// Snapshot bank 0x080..0x0AC: accepted, DATA attempts, RTS attempts, successes,
+// CTS timeouts, ACK timeouts, retry drops, completed, RX DATA, ignored responses,
+// input drops (zero: input is backpressured), RX CRC failures.
+RegOffset mac_diag_base_off = 'h080;
+RegOffset phy_diag_version_off = 'h214;
+RegOffset phy_diag_command_off = 'h218;
+RegOffset phy_diag_sequence_off = 'h21C;
+// Snapshot bank 0x220..: signals, RX starts, RX OK, RX CRC fail,
+// collided receptions (one per decoded frame), TX frames, duplicate signals,
+// invalid signal events, successful frames dropped at the full MAC delivery FIFO.
+RegOffset phy_diag_base_off = 'h220;
+RegOffset phy_energy_threshold_off = 'h260;
+RegOffset phy_sync_threshold_off = 'h264;
+RegOffset phy_interference_threshold_off = 'h268;
+RegOffset phy_error_model_off = 'h26C; // 0=strong overlap + frame PRR; 1=chunk bit PRR

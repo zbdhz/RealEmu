@@ -15,7 +15,7 @@
 //   d=1023 -> loss 1926 -> rx 74   (2.3dBm)   弱帧(隐藏)
 // PER: mem/Per.mem 默认表, 强帧 SYNC(idx1119)/RX(highSNR) 均 FFFF 必过,
 //      弱帧 SINR<lowSNR -> idx0 = 0 必败. 无需灌表.
-// 时标: 200 cycles/us (clkFreq=200MHz, 1cycle=5ns? Bluesim $time=ns).
+// 时标: US_CYCLES cycles/us（当前 250）；$time 是仿真器时间。
 // ============================================================================
 
 import GetPut::*;
@@ -80,8 +80,8 @@ module mkTestRawEmuCore_collision_v2(Empty);
     Int#(12) pFar  = txPower - lossFar;    // 74
 
     // ---- 测试调度 (cycle 精确) ----
-    // 帧 SYNC 20us + DATA MCS7 1038B ~154us -> 全帧 ~174us = 34800 cycles
-    // T2 重叠: 帧 B 在帧 A SYNC 后 30us (6000c) 注入 -> A 处于 SYNC 尾部/RX 头部
+    // 帧 SYNC 20us + DATA MCS7 1038B 156us -> 全帧 176us
+    // T2 重叠: 帧 B 在帧 A 开始后 30us 注入 -> A 处于 RX
     Reg#(UInt#(32)) t1done <- mkReg(0);
     Reg#(UInt#(32)) t2done <- mkReg(0);
     Reg#(UInt#(32)) t3done <- mkReg(0);
@@ -93,11 +93,11 @@ module mkTestRawEmuCore_collision_v2(Empty);
     Reg#(UInt#(32)) passCnt <- mkReg(0);
     Reg#(UInt#(32)) failCnt <- mkReg(0);
 
-    // T1 @ 1000: 单发强帧; @ 1000+45000 判定
-    rule t1_fire (cycleCount == 1000);
+    // T1 @ 5us: 单发强帧; @ 230us 判定
+    rule t1_fire (cycleCount == fromInteger(5 * valueOf(US_CYCLES)));
         inject(1, pNear);
     endrule
-    rule t1_check (cycleCount == 1000 + 45000 && t1done == 0);
+    rule t1_check (cycleCount == fromInteger(230 * valueOf(US_CYCLES)) && t1done == 0);
         t1done <= 1;
         if (recvOk == 1) begin passCnt <= passCnt + 1;
             $display("[V2] T1 staggered-ok PASS (recvOk=%0d)", recvOk);
@@ -107,14 +107,14 @@ module mkTestRawEmuCore_collision_v2(Empty);
         t1cnt <= recvOk;
     endrule
 
-    // T2 @ 100000: 强帧A; @ +6000 强帧B (SYNC 20us 中段重叠); @ +45000 判定
-    rule t2_fireA (cycleCount == 100000);
+    // T2 @ 500us: 强帧A; @ 530us 强帧B (RX 阶段重叠); @ 725us 判定
+    rule t2_fireA (cycleCount == fromInteger(500 * valueOf(US_CYCLES)));
         inject(1, pNear);
     endrule
-    rule t2_fireB (cycleCount == 106000);
+    rule t2_fireB (cycleCount == fromInteger(530 * valueOf(US_CYCLES)));
         inject(2, pNear);
     endrule
-    rule t2_check (cycleCount == 100000 + 45000 && t2done == 0);
+    rule t2_check (cycleCount == fromInteger(725 * valueOf(US_CYCLES)) && t2done == 0);
         t2done <= 1;
         let got = recvOk - t1cnt;
         if (got == 0) begin passCnt <= passCnt + 1;
@@ -125,11 +125,11 @@ module mkTestRawEmuCore_collision_v2(Empty);
         t2cnt <= recvOk;
     endrule
 
-    // T3 @ 200000: 单发弱帧; @ +45000 判定 (无 SYNC, 无 CCA, 无接收)
-    rule t3_fire (cycleCount == 200000);
+    // T3 @ 1000us: 单发弱帧; @ 1225us 判定 (无 SYNC, 无 CCA, 无接收)
+    rule t3_fire (cycleCount == fromInteger(1000 * valueOf(US_CYCLES)));
         inject(2, pFar);
     endrule
-    rule t3_check (cycleCount == 200000 + 45000 && t3done == 0);
+    rule t3_check (cycleCount == fromInteger(1225 * valueOf(US_CYCLES)) && t3done == 0);
         t3done <= 1;
         let got = recvOk - t2cnt;
         if (got == 0) begin passCnt <= passCnt + 1;
@@ -140,14 +140,14 @@ module mkTestRawEmuCore_collision_v2(Empty);
         t3cnt <= recvOk;
     endrule
 
-    // T4 @ 300000: 强帧; +6000 弱帧; @ +45000 判定 -> 强帧应 CRC OK
-    rule t4_fireA (cycleCount == 300000);
+    // T4 @ 1500us: 强帧; @ 1530us 弱帧; @ 1725us 判定 -> 强帧应 CRC OK
+    rule t4_fireA (cycleCount == fromInteger(1500 * valueOf(US_CYCLES)));
         inject(1, pNear);
     endrule
-    rule t4_fireB (cycleCount == 306000);
+    rule t4_fireB (cycleCount == fromInteger(1530 * valueOf(US_CYCLES)));
         inject(2, pFar);
     endrule
-    rule t4_check (cycleCount == 300000 + 45000 && t4done == 0);
+    rule t4_check (cycleCount == fromInteger(1725 * valueOf(US_CYCLES)) && t4done == 0);
         t4done <= 1;
         let got = recvOk - t3cnt;
         if (got == 1) begin passCnt <= passCnt + 1;
@@ -158,12 +158,13 @@ module mkTestRawEmuCore_collision_v2(Empty);
         t4cnt <= recvOk;
     endrule
 
-    rule simEnd (cycleCount == 350000);
+    rule simEnd (cycleCount == fromInteger(1750 * valueOf(US_CYCLES)));
         $display("[V2] ================= SUMMARY =================");
         $display("[V2] pass=%0d fail=%0d", passCnt, failCnt);
         $display("[V2] %s",
                  (failCnt == 0) ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
-        $finish();
+        if (failCnt != 0 || passCnt != 4) $finish(1);
+        else $finish(0);
     endrule
 
 endmodule

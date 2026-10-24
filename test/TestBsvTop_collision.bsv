@@ -21,6 +21,7 @@ import MacBridge::*;
 import CfgBridge::*;
 // import BsvTop::*;
 import BsvTov_simple::*;
+import Axi4LiteTypes::*;
 
 typedef 16 TEST_NODE_NUM;
 typedef 1000 Send_Delta_Time;
@@ -66,6 +67,15 @@ endfunction
 
 module mkTestRawEmuCore_collision(Empty);
     let core <- mkEmuCore;
+    // This legacy test does not configure registers, but the raw bus inputs
+    // still require an idle value on every clock.
+    rule driveConfigIdle;
+        core.dmaAxiLiteSlave.rdSlave.arValidData(False, 0, 0);
+        core.dmaAxiLiteSlave.rdSlave.rReady(False);
+        core.dmaAxiLiteSlave.wrSlave.awValidData(False, 0, 0);
+        core.dmaAxiLiteSlave.wrSlave.wValidData(False, 0, 0);
+        core.dmaAxiLiteSlave.wrSlave.bReady(False);
+    endrule
     // 初始化索引
     Reg#(UInt#(32)) initIdx <- mkReg(0);
     // 初始化完成标志
@@ -79,7 +89,7 @@ module mkTestRawEmuCore_collision(Empty);
     Reg#(File) logFile <- mkReg(InvalidFile);     // 日志文件句柄
 
     rule initialize (cycleCount == 10);
-        let fd <- $fopen("/home/emu/dev/RealEmu/scripts/collison.txt", "w");
+        let fd <- $fopen("collision.txt", "w");
         logFile <= fd;
     endrule
 
@@ -89,7 +99,7 @@ module mkTestRawEmuCore_collision(Empty);
     endrule
 
     // ==================== 发包规则 ====================//原生包发送（任务）
-    rule send1 if(initialized && logFile != InvalidFile && (cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0)||(cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0));
+    rule send1 if(initialized && logFile != InvalidFile && (cycleCount % (fromInteger(valueOf(Send_Delta_Time))*fromInteger(valueOf(US_CYCLES))) == 0)||(cycleCount % (fromInteger(valueOf(Send_Delta_Time))*fromInteger(valueOf(US_CYCLES))) == 0));
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 1;
         txReq.dstMacId = 0;
@@ -114,7 +124,7 @@ module mkTestRawEmuCore_collision(Empty);
     endrule
 
     // ==================== 发包规则 ====================//干扰包发送（任务）
-    rule send2 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200)== 5*200);
+    rule send2 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*fromInteger(valueOf(US_CYCLES)))== 5*fromInteger(valueOf(US_CYCLES)));
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 2;
         txReq.dstMacId = 0;

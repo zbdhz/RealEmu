@@ -15,7 +15,7 @@
 //   - node1/node0 MAC 寄存器对齐 ns-3 802.11a: timeout=70, cwMax=10,
 //     retryLimit=7; rtsThreshold 按 case 切换(off=65535, on=100)
 //
-// 时标: 200 cycles/us (Bluesim 周期 10ns, `BSIM 未传播到 src package)
+// 时标: US_CYCLES cycles/us（当前 250）；$time 是仿真器时间
 //
 // 结构说明: 严格单写者 —— controller 是 phase/AXI-Lite 握手/发包的
 // 唯一规则; recvPacket 只写收包统计寄存器且不读 controller 的任何
@@ -52,8 +52,6 @@ import CfgAxiLite::*;
 `define BSIM;
 
 // ---- 测试参数 ----
-Integer burstN        = 10;        // 段A 吞吐测试包数
-Integer rttN          = 5;         // 段B 延时测试包数
 Integer pktLen        = 1500;      // DATA 帧长 (byte)
 Int#(12)  txPower     = fromInteger(1920); // 60dBm (Q6.5), 与现有测试一致
 UInt#(32) caseWd      = 20000000;  // 单 case 看门狗 (cycles), 最长 case ~7M
@@ -101,7 +99,9 @@ typedef enum {
     RCV_DONE        // 本 case 收完, 等下一 case 首包
 } RecvSeg deriving (Eq, Bits);
 
-module mkTestP2P(Empty);
+// Shared controller: full matrix and short integration regression use identical
+// DUT wiring and AXI configuration. Only traffic volume/rate selection differs.
+module mkTestP2PWithParams#(Integer burstN, Integer rttN, Integer mcsCount)(Empty);
     let core <- mkEmuCore;
 
     // ---- AXI-Lite 从接口驱动 (每周期必须调用) ----
@@ -141,10 +141,10 @@ module mkTestP2P(Empty);
     endrule
 
     // case 参数派生: 0-7 = RTS off mcs0-7, 8-15 = RTS on mcs0-7
-    function Bool caseRtsOn(UInt#(6) c); return c >= 8; endfunction
+    function Bool caseRtsOn(UInt#(6) c); return c >= fromInteger(mcsCount); endfunction
     function Bit#(4) caseMcs(UInt#(6) c);
-        UInt#(6) m = caseRtsOn(c) ? (c - 8) : c;
-        return truncate(pack(m));
+        UInt#(6) m = caseRtsOn(c) ? (c - fromInteger(mcsCount)) : c;
+        return (mcsCount == 1) ? 7 : truncate(pack(m));
     endfunction
 
     // ---- 发送公共函数: 构造 DATA 帧并注入 core.tx ----
@@ -218,7 +218,7 @@ module mkTestP2P(Empty);
                 if (lat > rttMax) rttMax <= lat;
             end
             $display("[P2P] rtt #%0d lat=%0d cycles (%0d us)",
-                     rttRcvCnt, lat, lat / 200);
+                     rttRcvCnt, lat, lat / fromInteger(valueOf(US_CYCLES)));
             if (rttRcvCnt + 1 == fromInteger(rttN)) begin
                 recvSeg <= RCV_DONE;
                 rttDone <= True;
@@ -369,25 +369,28 @@ module mkTestP2P(Empty);
         PH_REPORT: begin
             UInt#(64) bitsTotal = fromInteger(burstN * pktLen * 8);
             UInt#(64) dur = zeroExtend(thrT1 - thrT0);
-            UInt#(64) thrMbps = (dur == 0) ? 0 : (bitsTotal * 200 / dur);
+            UInt#(64) thrMbps = (dur == 0) ? 0 : (bitsTotal * fromInteger(valueOf(US_CYCLES)) / dur);
             UInt#(64) rttAvg = rttSum / fromInteger(rttN);
 
             $display("[P2P] RESULT, case=%0d, mcs=%0d, rts=%0d, recv=%0d/%0d, thr=%0d Mbps, rtt_min=%0d us, rtt_avg=%0d us, rtt_max=%0d us",
                      caseIdx, caseMcs(caseIdx), caseRtsOn(caseIdx) ? 1 : 0,
                      burstRcvCnt, burstN, thrMbps,
-                     rttMin / 200, rttAvg / 200, rttMax / 200);
+                     rttMin / fromInteger(valueOf(US_CYCLES)), rttAvg / fromInteger(valueOf(US_CYCLES)), rttMax / fromInteger(valueOf(US_CYCLES)));
             $display("[P2P]        detail: t0=%0d t1=%0d dur_cycles=%0d, rtt_cycles min=%0d avg=%0d max=%0d",
                      thrT0, thrT1, dur, rttMin, rttAvg, rttMax);
 
             caseIdx <= caseIdx + 1;
-            if (caseIdx + 1 == 16)
+            if (caseIdx + 1 == fromInteger(2 * mcsCount))
                 phase <= PH_DONE;
             else
                 phase <= PH_CASE0;
         end
 
         PH_DONE: begin
-            $display("[P2P] All 16 cases (MCS0-7 x RTS on/off) completed.");
+            if (mcsCount == 1)
+                $display("[P2P] All 2 cases (MCS7 x RTS on/off) completed.");
+            else
+                $display("[P2P] All 16 cases (MCS0-7 x RTS on/off) completed.");
             $finish();
         end
         endcase
@@ -402,4 +405,12 @@ module mkTestP2P(Empty);
         end
     endrule
 
+endmodule
+
+module mkTestP2P(Empty);
+    mkTestP2PWithParams(10, 5, 8);
+endmodule
+
+module mkTestP2PSmoke(Empty);
+    mkTestP2PWithParams(2, 1, 1);
 endmodule

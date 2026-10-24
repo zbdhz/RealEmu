@@ -20,811 +20,328 @@
 
 
 import GetPut::*;
-import FIFO::*;
 import FIFOF::*;
 import ClientServer::*;
 import DReg::*;
-import BUtils ::*;
-import RegFile::*;
-import BRAM::*;
-
-import LFSR::*;
-import Divide::*;
-
-import ROM::*;
+import Vector::*;
 import Types::*;
 import PrimUtils::*;
-
+import FrameTiming::*;
+import ReceptionModel::*;
 
 interface PhyCore;
-    interface MacSrv lowMacTxSrv;
-    interface MacClt lowMacRxClt;
-
+    interface AirSrv lowMacTxSrv;
+    interface AirClt lowMacRxClt;
     interface PhySrv phyRxSrv;
     interface PhyClt phyTxClt;
-
     interface PerSrv perSrv;
-
-    // interface PhyStatusSrv phyStatusSrv;
     interface Get#(PhyStatus) getPhyStatus;
-    // method PhyStatus getPhyStatus;
-    
     interface RegAccessSrv phyRegSrv;
 endinterface
 
-///============================= phyState =====================================
-/// Int#(12) powerdB Q6.5       UInt#(32) powerLinear U24.8
-///============================================================================
-// (* synthesize *)
+typedef struct {
+    PhyEvent frame;
+    UInt#(32) arrival;
+    UInt#(20) symbols;
+    UInt#(64) linear;
+} TimedSignal deriving(Bits, Eq, FShow);
+typedef struct {
+    Bool valid;
+    PowerDb power;
+    UInt#(64) linear;
+    UInt#(32) endTime;
+    Bit#(32) tag;
+    MpduCacheAddr packet;
+} ActiveSignal deriving(Bits, Eq, FShow);
+
 module mkPhyYansWifi#(Integer id)(PhyCore);
-    FIFOF#(MacEvent)    lowMacTxReqQ      <- mkFIFOF;
-    FIFOF#(GenericResp) lowMacTxRespQ     <- mkFIFOF;
-    FIFOF#(MacEvent)    lowMacRxReqQ      <- mkFIFOF;
-    FIFOF#(GenericResp) lowMacRxRespQ     <- mkFIFOF;
-
-    FIFOF#(PhyEvent)    phyTxReqQ         <- mkFIFOF;
-    FIFOF#(GenericResp) phyTxRespQ        <- mkFIFOF;
-    FIFOF#(PhyEvent)    phyRxReqQ         <- mkFIFOF;
-    FIFOF#(GenericResp) phyRxRespQ        <- mkFIFOF;
-
-    // FIFOF#(PhyStatusReq) phyStatusReqQ     <- mkFIFOF;
-    // FIFOF#(PhyStatusRes) phyStatusRespQ    <- mkFIFOF;
-    
-    // 寄存器访问接口
-    FIFOF#(RegAccessReq)  phyRegReqQ  <- mkFIFOF;
+    FIFOF#(AirFrame) lowMacTxReqQ <- mkFIFOF;
+    FIFOF#(Tuple2#(AirFrame,UInt#(20))) preparedTx <- mkFIFOF;
+    FIFOF#(GenericResp) lowMacTxRespQ <- mkFIFOF;
+    FIFOF#(AirFrame) lowMacRxReqQ <- mkSizedFIFOF(8);
+    FIFOF#(GenericResp) lowMacRxRespQ <- mkFIFOF;
+    FIFOF#(PhyEvent) phyTxReqQ <- mkFIFOF;
+    FIFOF#(GenericResp) phyTxRespQ <- mkFIFOF;
+    FIFOF#(Tuple2#(PhyEvent, UInt#(32))) incoming <- mkSizedFIFOF(32);
+    FIFOF#(TimedSignal) preparedRx <- mkFIFOF;
+    FIFOF#(GenericResp) phyRxRespQ <- mkSizedFIFOF(32);
+    FIFOF#(RegAccessReq) phyRegReqQ <- mkFIFOF;
     FIFOF#(RegAccessResp) phyRegRespQ <- mkFIFOF;
-
-    //Per曲线动态加载访问接口
-    FIFOF#(PerCfg)      perTxReqQ   <- mkFIFOF;
-    FIFOF#(GenericResp) perTxRespQ  <- mkFIFOF;
-
-    `ifdef BSIM
-        UInt#(32)  clkFreq      = 1;   //the clock freq (/MHz)
-    `else
-        UInt#(32)  clkFreq      = 200;   //the clock freq (/MHz)
-    `endif
-
-    UInt#(32)  syncTime     = 20 * clkFreq;  
-    UInt#(32)  noisePower   = 256; //1mW   
-    Int#(12)   lowSNR       = -160;   
-    Int#(12)   highSNR      = 960;
-    Int#(12)   threash      =-960;   // threash = -30dBm  
-    // 碰撞模型对齐 ns-3: CS(Clear Sense)能量门限, 4dBm。
-    // 落在隐藏对收功率 74(d=1023,2.3dBm) 与最远正常对 186(d=682,5.8dBm) 之间,
-    // 用于: ①CCA 忙判定门控 ②SYNC 进入门限 ③碰撞干扰有效性判据
-    Int#(12)   csThreash    = 128;
-    //---------------------------
-    //reg wire 
-    //---------------------------
-    Reg#(Bool)       txBeginReg         <- mkReg(False);
-    Reg#(Bool)       txEndReg           <- mkReg(False);
-    Reg#(Bool)       rxBeginReg         <- mkReg(False);
-    Reg#(Bool)       rxEndReg           <- mkReg(False);
-
-    Reg#(Int#(12))   currentPowerReg    <- mkReg(0);     
-    Reg#(Mcs)        currentMcsReg      <- mkReg(0);
-    Reg#(UInt#(16))  currentLenReg      <- mkReg(0);
-    Reg#(MpduDigest) currentMpduDigest  <- mkReg(getEmptyMpduDigest);
-
-    Reg#(Bool)       rxValidReg         <- mkDReg(False); 
-    Reg#(Int#(12))   rxPowerReg         <- mkReg(0);   
-    Reg#(Mcs)        rxMcsReg           <- mkReg(0);
-    Reg#(UInt#(16))  rxLenReg           <- mkReg(0);
-    Reg#(MpduDigest) rxMpduDigest       <- mkReg(getEmptyMpduDigest); 
-    
-    Reg#(Bool)       txValidReg         <- mkDReg(False); 
-    Reg#(Mcs)        txMcsReg           <- mkReg(0);
-    Reg#(Int#(12))   txPowerReg         <- mkReg(0);   
-    Reg#(UInt#(16))  txLenReg           <- mkReg(0);    
-    Wire#(Mcs)       tempMcsReg         <- mkDWire(0);
-    
-    Reg#(PhyFsmState)stateReg           <- mkReg(PHY_IDLE); 
-    Wire#(Bool)      ccaBusyReg         <- mkDWire(False); 
-    // 碰撞标记: 正在收帧时又来一个过 CS 门限的新帧 -> 当前帧判废 (对齐 ns-3 无 capture 双败)
-    Reg#(Bool)       collideReg         <- mkReg(False);
-    Reg#(Bool)       syncCrcReg         <- mkDReg(False);
-    Reg#(Bool)       syncEndReg         <- mkDReg(False);
-    Reg#(Bool)       crcReg             <- mkDReg(False);
-
-    Wire#(Bool)      perValidWire       <- mkDWire(False);
-    Wire#(UInt#(16)) perWire            <- mkDWire(0);
-    Reg#(Bit#(16))   randomValueReg     <- mkReg(0);
-    Wire#(Bool)      powerdBValidWire   <- mkDWire(False);
-    Wire#(Int#(12))  powerdBWire        <- mkDWire(0);
-
-    Reg#(Bit#(DEV_ID_WIDTH))   currentSrcipReg   <- mkReg(0);
-    Reg#(Bit#(DEV_ID_WIDTH))   currentDstipReg   <- mkReg(0);
-    Reg#(Bit#(DEV_ID_WIDTH))   rxSrcipReg        <- mkReg(0);
-    Reg#(Bit#(DEV_ID_WIDTH))   rxDstipReg        <- mkReg(0);
-
-    //---------------------------
-    // timer 
-    //---------------------------
-    Wire#(Bool)         psduTimeValidWire   <- mkDWire(False);
-    Wire#(UInt#(32))    psduTimeWire        <- mkDWire(0);   
-
-    Reg#(UInt#(32))     rxTimerReg          <- mkReg(0);     
-    Reg#(UInt#(32))     syncTimerReg        <- mkReg(0);     
-    Reg#(UInt#(32))     txTimerReg          <- mkReg(clkFreq * 20);   
-    Reg#(UInt#(32))     ccaTimerReg         <- mkReg(0);  
-
-    //---------------------
-    //FIFOF
-    //---------------------
-    rule handshakeTx;
-        phyTxRespQ.deq;
+    let errors <- mkReceptionModel(id);
+    Reg#(UInt#(32)) clock <- mkReg(0);
+    Vector#(NODE_NUM, Reg#(ActiveSignal)) signals <- replicateM(mkReg(ActiveSignal{
+        valid:False,power:0,linear:0,endTime:0,tag:0,packet:0}));
+    Reg#(PhyFsmState) state <- mkReg(PHY_IDLE);
+    Reg#(AirFrame) current <- mkReg(toAirFrame(getEmptyMacEvent,0));
+    Reg#(UInt#(32)) endTime <- mkReg(0);
+    Reg#(UInt#(32)) headerTime <- mkReg(0);
+    Reg#(UInt#(32)) boundary <- mkReg(0);
+    Reg#(UInt#(64)) chunkNoise <- mkReg(1 << 24);
+    Reg#(Bool) chunkCollision <- mkReg(False);
+    Reg#(Bool) firstChunk <- mkReg(True);
+    Reg#(Bool) headerDone <- mkReg(False);
+    Reg#(PowerDb) energyThreshold <- mkReg(128);
+    Reg#(UInt#(64)) energyThresholdLinear <- mkReg(linearPower(128));
+    Reg#(PowerDb) syncThreshold <- mkReg(128);
+    Reg#(PowerDb) interferenceThreshold <- mkReg(128);
+    Reg#(Bool) bitModel <- mkReg(False);
+    Reg#(Bool) cca <- mkReg(False);
+    Reg#(Bool) txStart <- mkDReg(False);
+    Reg#(Bool) txEnd <- mkDReg(False);
+    Reg#(Bool) rxStart <- mkDReg(False);
+    Reg#(AirFrame) startedFrame <- mkReg(toAirFrame(getEmptyMacEvent,0));
+    Reg#(Bit#(32)) txTag <- mkReg(0);
+    Wire#(Maybe#(RxDecision)) decision <- mkDWire(tagged Invalid);
+    Vector#(9, PulseWire) hits <- replicateM(mkPulseWire);
+    Vector#(9, Reg#(Bit#(32))) counts <- replicateM(mkReg(0));
+    Vector#(9, Reg#(Bit#(32))) snapshot <- replicateM(mkReg(0));
+    Reg#(Bit#(32)) snapshotSequence <- mkReg(0);
+    PulseWire clearCounters <- mkPulseWire;
+    rule ticks;
+        clock <= clock + 1;
+        for (Integer i=0;i<9;i=i+1) counts[i] <= clearCounters ? 0 : counts[i] + (hits[i] ? 1 : 0);
     endrule
-
-    rule handshakeRx;
-       lowMacRxRespQ.deq;
+    rule txResponse; phyTxRespQ.deq; endrule
+    rule rxResponse; lowMacRxRespQ.deq; endrule
+    // Each timing result keeps its complete metadata and acceptance timestamp.
+    rule prepareReceive;
+        let t = incoming.first; incoming.deq;
+`ifdef TRACE_PHY
+        $display("PHY prepared id=%0d src=%0d pwr=%0d len=%0d clk=%0d arrival=%0d",id,tpl_1(t).srcPhyId,tpl_1(t).rfParam.power,tpl_1(t).ppduLen,clock,tpl_2(t));
+`endif
+        preparedRx.enq(TimedSignal{frame:tpl_1(t),arrival:tpl_2(t),symbols:ofdmSymbols(tpl_1(t).ppduLen,tpl_1(t).rfParam.mcs),linear:linearPower(tpl_1(t).rfParam.power)});
     endrule
-
-    rule handleLowMacTxReqQ;
-        if (lowMacTxReqQ.notEmpty) begin
-            let lowMactxReq = lowMacTxReqQ.first;
-            lowMacTxReqQ.deq;
-            lowMacTxRespQ.enq(GenericResp{});
-
-        //将mac包信息提取变成phy包 
-            PhyEvent phyTxpkt = PhyEvent{
-                srcPhyId  : lowMactxReq.srcMacId,
-                dstPhyId  : lowMactxReq.dstMacId,
-                rfParam   : lowMactxReq.rfParam, 
-                ppduLen   : unpack(pack(lowMactxReq.mpduDigest.length)), 
-                mpduDigest: lowMactxReq.mpduDigest
-            }; 
-            phyTxReqQ.enq(phyTxpkt);
-            //上层往下层发包无阻塞
-            $display("[%8d ns] phyTxReqQ.enq(phyTxpkt),mypyhid:%d,srcPhyid:%d,dstPhyId:%d",$time, id,phyTxpkt.srcPhyId,phyTxpkt.dstPhyId);
-            txValidReg  <= True;
-            txMcsReg    <= phyTxpkt.rfParam.mcs;
-            txPowerReg  <= phyTxpkt.rfParam.power;
-            txLenReg    <= unpack(pack(phyTxpkt.ppduLen));
-        end 
+    rule prepareTransmit;
+        let f = lowMacTxReqQ.first; lowMacTxReqQ.deq;
+        preparedTx.enq(tuple2(f,ofdmSymbols(f.mpduDigest.length,f.rfParam.mcs)));
     endrule
+    // All signal lifecycle updates share one clock boundary. Endpoints are
+    // half-open [start,end); an arrival exactly at an end does not overlap it.
+    rule airClock;
+        UInt#(32) airNow = clock - 2;
+        PhyFsmState next_state = state;
+        AirFrame next_current = current;
+        UInt#(32) next_endTime = endTime;
+        UInt#(32) next_headerTime = headerTime;
+        UInt#(32) next_boundary = boundary;
+        UInt#(64) next_chunkNoise = chunkNoise;
+        Bool next_chunkCollision = chunkCollision;
+        Bool next_firstChunk = firstChunk;
+        Bool next_headerDone = headerDone;
+        Bool next_cca = cca;
 
-
-    rule handlePhyRxReqQ;
-        if (phyRxReqQ.notEmpty) begin
-            let phyRxpkt = phyRxReqQ.first;
-            phyRxReqQ.deq;
-            phyRxRespQ.enq(GenericResp{});
-
-            rxValidReg  <= True;
-            rxSrcipReg  <= phyRxpkt.srcPhyId;
-            rxDstipReg  <= phyRxpkt.dstPhyId;
-            rxMcsReg    <= phyRxpkt.rfParam.mcs;
-            rxPowerReg  <= phyRxpkt.rfParam.power;
-            rxLenReg    <= unpack(pack(phyRxpkt.ppduLen));
-            rxMpduDigest<= phyRxpkt.mpduDigest;
-            //暂存数据包，设定标志位，等待逻辑运算通过后传输
-            $display("[%8d ns] phyRxReqQ.deq;,mypyhid:%d,srcPhyid:%d,dstPhyId:%d",$time, id,phyRxpkt.srcPhyId,phyRxpkt.dstPhyId);
-        end
-    endrule
-
-    rule handleLowMacRxReqQ;
-        //crc校验通过才会传
-        if (crcReg)begin
-            MacEvent macRxpkt1 = MacEvent{
-                srcMacId  : currentSrcipReg,
-                dstMacId  : currentDstipReg,
-                rfParam   : RfParam{power: currentPowerReg, mcs: currentMcsReg}, 
-                mpduDigest: currentMpduDigest,
-                status    : True
-            }; 
-            lowMacRxReqQ.enq(macRxpkt1);
-            $display("[%8d ns] lowMacRxReqQ.enq: %x,myphyid :%d,srcid:%d, dstid:%d, power:%d", $time, macRxpkt1,id,macRxpkt1.srcMacId,macRxpkt1.dstMacId,macRxpkt1.rfParam.power);
-            //lowMacRxRespQ.enq(GenericResp{});
-            /*  同步后的结果不传入MAC，否则会导致lowMacRxReqQ被enq两次，产生错误的结果
-        end else if(syncEndReg)begin
-            MacEvent macRxpkt2 = MacEvent{
-                srcMacId  : currentSrcipReg,
-                dstMacId  : currentDstipReg,
-                rfParam   : RfParam{power: currentPowerReg, mcs: currentMcsReg}, 
-                mpduDigest: currentMpduDigest,
-                status    : True
-            }; 
-            lowMacRxReqQ.enq(macRxpkt2);
-            //lowMacRxRespQ.enq(GenericResp{});*/
-        end
-    endrule
-
-
-    //---------------------------
-    //ccaBusyReg
-    //---------------------------
-    rule updateccaBusyReg;
-    	ccaBusyReg <= (ccaTimerReg > 0) || (stateReg == PHY_TX);
-        // CCA 门控: rx 事件仅当过 CS 能量门限才武装忙定时器(弱帧=隐藏节点不占介质);
-        // TX 侧自身帧无条件武装。psduTimeValidWire 到达时 rxPowerReg 仍是触发帧功率。
-        if (psduTimeValidWire && (stateReg == PHY_TX || rxPowerReg > csThreash)) begin
-            ccaTimerReg <= (ccaTimerReg > (psduTimeWire + syncTime)) ? (ccaTimerReg - 1) : (psduTimeWire + syncTime - 1);
-        end 
-        else if(ccaTimerReg > 0)begin
-            ccaTimerReg <= ccaTimerReg - 1;
-   	    end 
-        else begin
-            ccaTimerReg <= 0 ;
-        end
-    endrule
-
-
-    //---------------------------
-    // psduTimeReg
-    //---------------------------
-    rule updata_mcs;
-        if(txValidReg)
-            tempMcsReg <= txMcsReg;
-        else if(rxValidReg)
-            tempMcsReg <= rxMcsReg;
-    endrule
-
-    // UInt#(10) ndbps_lut[8] = {
-    //     26, 
-    //     52, 
-    //     78, 
-    //     104, 
-    //     156, 
-    //     208, 
-    //     234, 
-    //     260
-    // };
-    UInt#(10) ndbps_lut[8] = {
-        24, 
-        36, 
-        48, 
-        72, 
-        96, 
-        144, 
-        192, 
-        216
-    };//80211a
-    Wire#(UInt#(10)) ndbpsWire <- mkDWire(26);
-
-    rule updateNdbps;
-        ndbpsWire <= (tempMcsReg < 8) ? ndbps_lut[tempMcsReg] : 0;
-    endrule
-
-    Server#(Tuple2#(UInt#(20),UInt#(10)), Tuple2#(UInt#(10),UInt#(10))) divider <- mkDivider(1);
-    rule feed_operation;
-        if(txValidReg) begin
-            // +22 bit = SERVICE(16) + tail(6), 对齐 ns-3: N_sym = ceil((16 + 8L + 6)/NDBPS)
-            UInt#(20) aligned_dividend = (txLenReg == 0) ? zeroExtend(1'b1) << 3 : (zeroExtend(txLenReg) << 3) + 22;
-            divider.request.put(tuple2(aligned_dividend, ndbpsWire));
-        end
-        else if(rxValidReg) begin
-            UInt#(20) aligned_dividend = (rxLenReg == 0) ? zeroExtend(1'b1) << 3 : (zeroExtend(rxLenReg) << 3) + 22;
-            divider.request.put(tuple2(aligned_dividend, ndbpsWire));
-            //immLog("mkPhyYansWifi", "feed_operation", $format("Id %5d, Phy Rx Event", id));
-            // $display("PHY_RX EVENT");
-        end
-    endrule
-
-    rule divideResult;
-        let result <- divider.response.get;
-        let {quotient, remainder} = result;
-        psduTimeWire        <= clkFreq *((cExtend(quotient) << 2) + ((remainder > 0) ? 4 : 0));
-        psduTimeValidWire   <= True;
-     endrule
-
-    //---------------------------
-    // 碰撞检测(并入 handlePhyState 的 SYNC/RX 分支):
-    // 接收中又来一个过 CS 门限的新帧 -> collideReg 置位, 当前帧判废。
-    // 新帧自身不重同步(状态机忙被丢弃) => 两帧全败, 对齐 ns-3 无 capture 碰撞语义。
-    // 发送方走既有 timeout 重传路径, MacCore 零改动。
-    //---------------------------
-
-    //---------------------------
-    // stateReg
-    //---------------------------
-    rule handlePhyState;
-        case (stateReg)
-            PHY_IDLE: begin
-                txEndReg <= False;
-                rxEndReg <= False;
-                if (txValidReg) begin
-                    // 进入发送状态
-                    txBeginReg      <= True;
-                    stateReg        <= PHY_TX;
-                    txTimerReg      <= syncTime;
-                    currentMcsReg   <= txMcsReg;
-                    currentPowerReg <= txPowerReg;
-                    currentLenReg   <= txLenReg;
-                    // $display("PHY_TX start");
-                    $display("[%8d ns] id: %0d, PHY_TX start", $time, id);
-                    // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
-                end
-                else if (rxValidReg && (rxPowerReg > csThreash)) begin
-                    // 进入同步状态 (CS 门限: 弱于门限的帧不占用接收机, 对齐隐藏节点语义)
-                    rxBeginReg      <= True;
-                    stateReg        <= PHY_SYNC;
-                    syncTimerReg    <= syncTime;
-                    currentSrcipReg <= rxSrcipReg;
-                    currentDstipReg <= rxDstipReg;
-                    currentMcsReg   <= rxMcsReg;
-                    currentPowerReg <= rxPowerReg;
-                    currentLenReg   <= rxLenReg;
-                    currentMpduDigest <= rxMpduDigest;
-                    // if(id==0 || id == 1)
-                    // $display("%0d PHY_SYNC start, power:%d",id,rxPowerReg);
-                    // $display("[%8d ns] PHY_SYNC start, power:%d",$time, rxPowerReg);
-                    // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync Start,power: %0d", id, rxPowerReg));
-                end
-            end
-    
-            PHY_SYNC: begin
-                // 碰撞: 同步中被新强帧重叠 -> 判废
-                if (rxValidReg && (rxPowerReg > csThreash)) begin
-                    collideReg <= True;
-                    $display("[%8d ns] id: %0d, COLLISION in SYNC (power:%d)",
-                             $time, id, rxPowerReg);
-                end
-                // 同步计时器处理
-                if (syncTimerReg > 0) begin
-                    syncTimerReg <= syncTimerReg - 1;
-                end
-    
-                // 数据时间设置
-                if (rxBeginReg && psduTimeValidWire) begin
-                    rxTimerReg <= psduTimeWire;
-                    rxBeginReg <= False;
-                    // $display("[%8d ns] psdu data time: %0d (clk)", $time, psduTimeWire);
-                    //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, psdu data time: %0d (clk)", id, psduTimeWire));
-                end
-    
-                // 同步结果判断
-                if (perValidWire) begin
-                    syncEndReg <= True;
-                    if (perWire >= unpack(randomValueReg)) begin
-                        stateReg    <= PHY_RX;
-                        syncCrcReg  <= True;
-                        // if(id==0 || id == 1)
-                            // $display("[%8d ns] %0d PHY_SYNC OK, start PHY_RX", $time, id);
-                        // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync OK, start Phy Rx", id));
-                    end 
-                    else begin
-                        //stateReg    <= PHY_IDLE;
-                        stateReg <= PHY_RX;
-                        syncCrcReg  <= False;
-                        // $display("PHY_SYNC ERROR, PHY_IDLE");
-                        // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Sync Error", id));
-                    end
-                end
-            end
-    
-            PHY_RX: begin
-                // 碰撞: 接收中被新强帧重叠 -> 判废
-                // (帧结束周期不置位: 与帧尾清零写冲突, 且 CRC 判决读旧值语义不变)
-                if (rxValidReg && (rxPowerReg > csThreash) && !perValidWire) begin
-                    collideReg <= True;
-                    $display("[%8d ns] id: %0d, COLLISION in RX (power:%d)",
-                             $time, id, rxPowerReg);
-                end
-                // 接收计时器处理
-                if (rxTimerReg > 0) begin
-                    rxTimerReg <= rxTimerReg - 1;
-                end
-    
-                // CRC 校验结果
-                if (perValidWire) begin
-                    stateReg <= PHY_IDLE;
-                    rxEndReg <= True;
-                    collideReg <= False;          // 帧尾清零碰撞标记
-                    if(perWire >= unpack(randomValueReg) && !collideReg)begin
-                        crcReg <= True;
-                        // if(id==0 || id == 1)
-                            $display("%0d CRC OK",id);
-                        //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, CRC OK", id));
-                    end else begin
-                        crcReg <= False;
-                        // if(id==0 || id == 1)
-                            $display("%d CRC ERROR",id);
-                        immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, CRC Error", id));
-                    end
-                end
-            end
-    
-            PHY_TX: begin
-                // $display("[%8d ns] PHY_TX", $time);
-                // 发送计时器处理
-                if (txBeginReg && psduTimeValidWire) begin
-                    txTimerReg <= syncTime + psduTimeWire - 1;
-                    txBeginReg <= False;
-                    // if(id==0 || id == 1)
-                        // $display("%d tx time: %0d (clk)", id, syncTime + psduTimeWire);
-                    //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, tx time: %0d (clk)", id, syncTime + psduTimeWire));
-                end 
-                else if (txTimerReg > 0) begin
-                    txTimerReg <= txTimerReg - 1;
-                end 
+        Vector#(NODE_NUM,ActiveSignal) nextSignals = readVReg(signals);
+        for (Integer i=0;i<valueOf(NODE_NUM);i=i+1)
+            if (nextSignals[i].valid && timeReached(airNow,nextSignals[i].endTime)) nextSignals[i].valid = False;
+        Bool newSignal = False;
+        PhyEvent arrival = getEmptyPhyEvent;
+        UInt#(32) arrivalTime = airNow;
+        UInt#(32) arrivalEnd = airNow;
+        if (preparedRx.notEmpty) begin
+            let t = preparedRx.first; preparedRx.deq;
+            arrival = t.frame; arrivalTime = t.arrival;
+            arrivalEnd = t.arrival + symbolsToCycles(t.symbols);
+`ifdef TRACE_PHY
+            $display("PHY signal id=%0d src=%0d pwr=%0d now=%0d end=%0d state=%0d",id,arrival.srcPhyId,arrival.rfParam.power,airNow,arrivalEnd,state);
+`endif
+            hits[0].send;
+            if (t.frame.srcPhyId < fromInteger(valueOf(NODE_NUM)) && t.frame.rfParam.mcs < 8 && !timeReached(airNow,arrivalEnd)) begin
+                Bit#(TLog#(NODE_NUM)) source = truncate(t.frame.srcPhyId);
+                let prior = nextSignals[source];
+                Bool duplicate = prior.valid && prior.tag == t.frame.exchangeId && prior.packet == t.frame.mpduDigest.cacheAddr;
+                if (duplicate) hits[6].send;
                 else begin
-                    stateReg <= PHY_IDLE;
-                    txEndReg <= True;
-                    $display("[%8d ns] PHY_TX END", $time);
-                    // if(id==0 || id == 1)
-                    //     $display("%d PHY_TX END", id);
-                    //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx End", id));
+                    nextSignals[source] = ActiveSignal{valid:True,power:t.frame.rfParam.power,linear:t.linear,
+                        endTime:arrivalEnd,tag:t.frame.exchangeId,packet:t.frame.mpduDigest.cacheAddr};
+                    newSignal = True;
                 end
             end
-    
-            default: begin
-                stateReg <= PHY_IDLE;  // 异常恢复
-                //$display("Unknown state, reset to IDLE");
-                //immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Unknown state, reset to IDLE", id));
+            else hits[7].send;
+        end
+        Bool receiving = state == PHY_SYNC || state == PHY_RX;
+        Bool ended = state != PHY_IDLE && timeReached(airNow,endTime);
+        Vector#(NODE_NUM,UInt#(64)) energyTerms = replicate(0);
+        Vector#(NODE_NUM,UInt#(64)) interferenceTerms = replicate(0);
+        UInt#(5) interferers = 0;
+        for (Integer i=0;i<valueOf(NODE_NUM);i=i+1) begin
+            let sig = nextSignals[i]; signals[i] <= sig;
+            if(sig.valid) begin
+                energyTerms[i] = sig.linear;
+                if(sig.power > interferenceThreshold) begin
+                    interferenceTerms[i] = sig.linear; interferers = interferers+1;
+                end
             end
+        end
+        // Balanced reduction: four adder levels for the 16-source model.
+        for(Integer stride=1;stride<valueOf(NODE_NUM);stride=stride*2)
+            for(Integer i=0;i<valueOf(NODE_NUM);i=i+2*stride) begin
+                energyTerms[i] = energyTerms[i]+energyTerms[i+stride];
+                interferenceTerms[i] = interferenceTerms[i]+interferenceTerms[i+stride];
+            end
+        Bit#(TLog#(NODE_NUM)) ownIndex = truncate(current.srcMacId);
+        let own = nextSignals[ownIndex];
+        Bool ownEligible = own.valid && own.power > interferenceThreshold;
+        UInt#(64) noise = (1 << 24) + interferenceTerms[0] - (ownEligible ? own.linear : 0);
+        Bool overlap = interferers > (ownEligible ? 1 : 0);
+        next_cca = energyTerms[0] > energyThresholdLinear || (state == PHY_TX && !ended);
+        if (receiving) begin
+            Bool headerEnd = !headerDone && timeReached(airNow,headerTime);
+            if (noise != chunkNoise || overlap != chunkCollision || ended || headerEnd) begin
+                UInt#(32) stop = ended ? endTime : airNow;
+                errors.request.put(RxChunk{frame:current,interference:chunkNoise,cycles:stop-boundary,
+                    header:!headerDone,first:firstChunk,last:ended,headerEnd:headerEnd,
+                    collided:chunkCollision,bitModel:bitModel});
+                next_boundary = stop; next_chunkNoise = noise; next_chunkCollision = overlap; next_firstChunk = False;
+            end
+            if (headerEnd) begin next_headerDone = True; next_state = PHY_RX; end
+        end
+        if (ended) begin
+            next_state = PHY_IDLE;
+            if (state == PHY_TX) begin txEnd <= True; txTag <= current.exchangeId; end
+        end
+        // Prefer a ready TX on a truly idle PHY. The emitted channel event and
+        // TXSTART share this boundary; airtime starts after all calculations.
+        if ((state == PHY_IDLE || ended) && preparedTx.notEmpty && phyTxReqQ.notFull && lowMacTxRespQ.notFull) begin
+            let t = preparedTx.first; let f = tpl_1(t); preparedTx.deq;
+            PhyEvent e = getEmptyPhyEvent;
+            e.srcPhyId=f.srcMacId; e.dstPhyId=f.dstMacId; e.rfParam=f.rfParam;
+            e.mpduDigest=f.mpduDigest; e.ppduLen=f.mpduDigest.length; e.exchangeId=f.exchangeId;
+            phyTxReqQ.enq(e); lowMacTxRespQ.enq(GenericResp{});
+            next_current = f; next_endTime = airNow + symbolsToCycles(tpl_2(t));
+            next_state = PHY_TX; txStart <= True; next_cca = True; hits[5].send;
+        end
+        else if ((state == PHY_IDLE || ended) && newSignal && arrival.rfParam.power > syncThreshold) begin
+            MacEvent f = getEmptyMacEvent;
+            f.srcMacId=arrival.srcPhyId; f.dstMacId=arrival.dstPhyId;
+            f.rfParam=arrival.rfParam; f.mpduDigest=arrival.mpduDigest; f.status=True;
+            let air = toAirFrame(f,arrival.exchangeId);
+            next_current = air; startedFrame <= air; rxStart <= True; next_state = PHY_SYNC;
+            next_endTime = arrivalEnd; next_headerTime = arrivalTime + 20*fromInteger(valueOf(US_CYCLES));
+            // Time before the registered timing result is ready is charged to
+            // the first chunk, rather than extending the physical frame.
+            next_boundary = arrivalTime; next_firstChunk = True; next_headerDone = False;
+            Bit#(TLog#(NODE_NUM)) arrivingIndex = truncate(arrival.srcPhyId);
+            let arriving = nextSignals[arrivingIndex];
+            Bool eligible = arriving.power > interferenceThreshold;
+            UInt#(64) n = (1 << 24) + interferenceTerms[0] - (eligible ? arriving.linear : 0);
+            Bool c = interferers > (eligible ? 1 : 0);
+            next_chunkNoise = n; next_chunkCollision = c; hits[1].send;
+        end
+        state <= next_state;
+        current <= next_current;
+        endTime <= next_endTime;
+        headerTime <= next_headerTime;
+        boundary <= next_boundary;
+        chunkNoise <= next_chunkNoise;
+        chunkCollision <= next_chunkCollision;
+        firstChunk <= next_firstChunk;
+        headerDone <= next_headerDone;
+        cca <= next_cca;
+    endrule
+    rule finishDecode;
+        let d <- errors.response.get;
+        decision <= tagged Valid d;
+        if (!d.header) begin
+            if (d.success) begin
+                let f = d.frame; f.status = True; hits[2].send;
+                if (lowMacRxReqQ.notFull) lowMacRxReqQ.enq(f);
+                else hits[8].send; // Physical time continues if host delivery is blocked.
+            end
+            else hits[3].send;
+            if (d.collided) hits[4].send;
+        end
+    endrule
+    RWire#(Tuple2#(RegOffset,Bit#(32))) configWrite <- mkRWire;
+    rule applyConfig (configWrite.wget matches tagged Valid .w);
+        let v = unpack(truncate(tpl_2(w)));
+        case(tpl_1(w))
+            phy_energy_threshold_off: begin energyThreshold <= v; energyThresholdLinear <= linearPower(v); end
+            phy_sync_threshold_off: syncThreshold <= v;
+            phy_interference_threshold_off: interferenceThreshold <= v;
+            phy_error_model_off: bitModel <= tpl_2(w) == 1;
         endcase
     endrule
-
-
-    //---------------------------
-    //RandI 16
-    //---------------------------
-    RandI#(16) randGen <- mkRn_16;
-
-
-    rule getRand;
-        let tmpRand    <- randGen.get();  
-        randomValueReg <= tmpRand;
-    endrule
-
-    //---------------------------
-    // ROM
-    //---------------------------
-    Rom1port#(UInt#(12),UInt#(32)) rom1 <- mkSingleRom("Lg.mem");
-
-    // Rom1port#(UInt#(14),UInt#(16)) rom2 <- mkSingleRom("Per.mem");
-    //     //ram的外部定义，需要暴露另一端口给DMA配置  d:10
-    BRAM2Port#(PerIn, PerOut) perRam <- mkBRAM2Server(
-        // defaultValue
-        BRAM_Configure {                            
-            memorySize   : 16383,
-            loadFormat   : tagged Hex "Per.mem",
-            latency      : 2,
-            outFIFODepth : 4,
-            allowWriteResponseBypass : False
-        }
-    );
-
-    //功率值查表映射（Q6.5定点数）
-    rule putAddr1 if ((stateReg == PHY_SYNC || stateReg == PHY_RX) && rxValidReg);
-        UInt#(12) addr1 = unpack(pack(rxPowerReg + 2047 + 1));
-        rom1.request.put(addr1);
-        // $display("addr1: %0d", addr1);
-    endrule
-    //从功率值到包接受率的映射
-    rule rom2Request (powerdBValidWire);
-        UInt#(12) sinrAddr; UInt#(14) addr2;
-        if (currentPowerReg < (lowSNR + powerdBWire)) begin
-            sinrAddr = 0;
-        end 
-        else if (currentPowerReg >= (highSNR + powerdBWire)) begin
-            sinrAddr = 1119;
-        end 
-        else begin
-            sinrAddr = 160 + unpack(pack(currentPowerReg - powerdBWire));
-        end
-        
-        if (stateReg == PHY_RX) begin
-            addr2 = zeroExtend(unpack(pack(currentMcsReg))) * 1120 + zeroExtend(sinrAddr);
-        end 
-        else begin
-            addr2 = zeroExtend(sinrAddr);
-        end
-        // rom2.request.put(addr2);
-        let bramReq = BRAMRequest{             
-            write: False,          
-            responseOnWrite: False,  
-            address:  addr2,            
-            datain: 0             
-        };
-        perRam.portB.request.put(bramReq);
-        // if(id==0 || id == 1)
-            // $display("id: %d, addr2: %d, sinrAddr: %d, currentMcsReg: %d",id, addr2,sinrAddr,currentMcsReg);
-
-        // $display("SINR: %0d ", (currentPowerReg - powerdBWire) >> 5);
-        // immLog("mkPhyYansWifi", "rom2Request", $format("Id %5d, SINR: %0d", id, (currentPowerReg - powerdBWire) >> 5));
-
-    endrule
-
-
-    //---------------------------
-    // let
-    //---------------------------
-    Reg#(Maybe#(File)) fdReg <- mkReg(Invalid);
-
-    // 打开文件（仅在初始化时执行一次）
-    // rule openFile if (!isValid(fdReg));
-    //     let fd <- $fopen("/home/psz/RealEmu/scripts/PhyCore.txt", "a");
-    //     fdReg <= tagged Valid fd;
-    //     $display("File opened.");
-    // endrule
-
-    rule let1;
-        // let tmpPer <- rom2.response.get;
-        let tmpPer <- perRam.portB.response.get;
-        perWire <= tmpPer;
-        perValidWire <= True;
-        // if(stateReg == PHY_RX)begin
-        //     let fd = validValue(fdReg);
-        //     $fwrite(fd, "%0d\n", tmpPer);  // 写入数据并换行
-        // end
-        // $display("PER: %0d ", tmpPer);
-        immLog("mkPhyYansWifi", "let1", $format("Id %5d, PER: %0d", id, tmpPer));
-    endrule
-
-
-    //-----------------------------------
-    // search
-    //----------------------------------
-    Reg#(UInt#(32)) currentmaxReg <- mkReg(0);
-    Reg#(UInt#(32)) currentReg    <- mkDReg(0);    
-    Reg#(UInt#(32)) noiseSumReg   <- mkReg(noisePower); 
-    Reg#(UInt#(32)) cycleCount    <- mkReg(0);
-    UInt#(32) sinrSmaple = 5 * clkFreq;   
-    BinarySearchIFC searcher <- mkBinarySearch;
-    rule feed_test((syncTimerReg == 30) || (rxTimerReg == 30));
-        searcher.put(noiseSumReg);
-        //$display("Binary searching %0d",noiseSumReg);
-        //immLog("mkPhyYansWifi", "feed_test", $format("Id %5d, Binary Searching %0d", id, noiseSumReg));
-    endrule
-
-    rule search_result;
-        let res <- searcher.get;
-        powerdBWire<= unpack(pack(res));
-        powerdBValidWire <= True;
-        //$display("Binary searched %0d",res);
-        //immLog("mkPhyYansWifi", "search_result", $format("Id %5d, Binary Searched %0d", id, res));
-    endrule
-
-
-    //---------------------------
-    // SINR
-    //--------------------------
-    rule rom1Get;
-        let data <- rom1.response.get;
-        currentReg <= data;
-        //$display("max : %0d",data);
-        // immLog("mkPhyYansWifi", "rom1Get", $format("Id %5d, max : %0d", id, data));
-    endrule
-
-    rule updateMaxpower((stateReg == PHY_SYNC) || (stateReg == PHY_RX)) ;
-        if(rxEndReg || syncEndReg) 
-            currentmaxReg <= 0;
-        else if(cycleCount == sinrSmaple - 1)
-            currentmaxReg <= 0;
-        else if (currentReg > currentmaxReg) begin
-            currentmaxReg <= currentReg;
-            // $display("max : %0d\n",currentReg);
-        end 
-    endrule
-
-    rule handleCycleEnd((stateReg == PHY_SYNC) || (stateReg == PHY_RX));
-        if(rxEndReg || syncEndReg) begin
-            noiseSumReg <=  noisePower;
-        end 
-        else if(cycleCount == sinrSmaple - 1) begin
-            noiseSumReg <= noiseSumReg + currentmaxReg;
-        end
-    endrule
-
-    rule incrementCounter((stateReg == PHY_SYNC) || (stateReg == PHY_RX));
-        if(cycleCount == sinrSmaple - 1)
-              cycleCount <= 0;
-        else
-              cycleCount <= cycleCount + 1;
-    endrule
-
-    // rule handlephyStatusReq;
-    //     if (phyStatusReqQ.notEmpty) begin
-    //         let req = phyStatusReqQ.first;
-    //         phyStatusReqQ.deq;
-    //         let resp = getEmptyPhyStatusResp();
-    //         let newPhyStatus = PhyStatus {
-    //             cca         : ccaBusyReg,
-    //             fcsEn       : rxEndReg,
-    //             fcsCorrect  : crcReg,
-    //             txStart     : txBeginReg,
-    //             txEnd       : txEndReg,
-    //             rxStart     : rxBeginReg,
-    //             rxEnd       : rxEndReg,
-    //             state       : stateReg
-    //         };
-    //         resp.phyStatus = newPhyStatus;
-    //         phyStatusRespQ.enq(resp);
-    //     end
-    // endrule
-
-    // 寄存器访问处理规则
-    rule handlePhyRegAccess;
-        let req = phyRegReqQ.first;
-        phyRegReqQ.deq;
-        RegAccessResp resp = RegAccessResp{readData: 0, error: False};
-        
-        // 寄存器访问逻辑
+    Bool configIdle = state == PHY_IDLE && !cca && !incoming.notEmpty && !preparedRx.notEmpty
+        && !lowMacTxReqQ.notEmpty && !preparedTx.notEmpty;
+    rule registerAccess;
+        let req = phyRegReqQ.first; phyRegReqQ.deq;
+        RegAccessResp resp = RegAccessResp{readData:0,error:False};
+        Bool writable = False;
         case (req.regOffset)
-            // PHY 状态寄存器 (仅查询)
-            phy_fsm_state_off: begin
-                resp.readData = zeroExtend(pack(stateReg));
+            phy_fsm_state_off: resp.readData=zeroExtend(pack(state));
+            phy_cca_busy_off: resp.readData=zeroExtend(pack(cca));
+            rx_power_dbm_off: resp.readData=signExtend(pack(current.rfParam.power));
+            fcs_en_h: resp.readData=zeroExtend(pack(isValid(decision) && !fromMaybe(?,decision).header));
+            fcs_correct_h: resp.readData=zeroExtend(pack(isValid(decision) && fromMaybe(?,decision).success));
+            phy_diag_version_off: resp.readData='h00020000;
+            phy_diag_sequence_off: resp.readData=snapshotSequence;
+            phy_diag_command_off: begin
+                writable=True;
+                if (req.writeEnable) begin
+                    if (req.writeData == 1) begin
+                        for(Integer i=0;i<9;i=i+1) snapshot[i] <= counts[i];
+                        snapshotSequence <= snapshotSequence+1;
+                    end
+                    else if(req.writeData == 2) clearCounters.send;
+                    else resp.error=True;
+                end
             end
-            phy_cca_busy_off: begin
-                resp.readData = zeroExtend(pack(ccaBusyReg));
+            phy_energy_threshold_off, phy_sync_threshold_off, phy_interference_threshold_off: begin
+                writable=True;
+                PowerDb v = unpack(truncate(req.writeData));
+                if(req.regOffset == phy_energy_threshold_off) begin
+                    resp.readData=signExtend(pack(energyThreshold));
+                    if(req.writeEnable && configIdle && signExtend(pack(v)) == req.writeData) configWrite.wset(tuple2(req.regOffset,req.writeData));
+                end
+                if(req.regOffset == phy_sync_threshold_off) begin
+                    resp.readData=signExtend(pack(syncThreshold));
+                    if(req.writeEnable && configIdle && signExtend(pack(v)) == req.writeData) configWrite.wset(tuple2(req.regOffset,req.writeData));
+                end
+                if(req.regOffset == phy_interference_threshold_off) begin
+                    resp.readData=signExtend(pack(interferenceThreshold));
+                    if(req.writeEnable && configIdle && signExtend(pack(v)) == req.writeData) configWrite.wset(tuple2(req.regOffset,req.writeData));
+                end
+                if(req.writeEnable && (!configIdle || signExtend(pack(v)) != req.writeData)) resp.error=True;
             end
-            rx_power_dbm_off: begin
-                resp.readData = zeroExtend(pack(rxPowerReg));
+            phy_error_model_off: begin
+                writable=True; resp.readData=zeroExtend(pack(bitModel));
+                if(req.writeEnable) begin
+                    if(configIdle && req.writeData <= 1) configWrite.wset(tuple2(req.regOffset,req.writeData));
+                    else resp.error=True;
+                end
             end
-            fcs_en_h: begin
-                resp.readData = zeroExtend(pack(rxEndReg));
-            end
-            fcs_correct_h: begin
-                resp.readData = zeroExtend(pack(crcReg));
-            end
-            
             default: begin
-                resp.error = True;
-                $display("[PhyCore:%0d] Invalid register offset: 0x%03h", id, req.regOffset);
+                if(req.regOffset >= phy_diag_base_off && req.regOffset < phy_diag_base_off+36 && req.regOffset[1:0] == 0)
+                    resp.readData=snapshot[(req.regOffset-phy_diag_base_off)>>2];
+                else resp.error=True;
             end
         endcase
-        
+        if(req.writeEnable && !writable) resp.error=True;
         phyRegRespQ.enq(resp);
     endrule
-
-
-    //更新per配置
-    rule updatePerCfg;
-        let perCfg = perTxReqQ.first;
-        perTxReqQ.deq;
-        perTxRespQ.enq(GenericResp{});
-        let bramReq = BRAMRequest {
-                write: True,
-                responseOnWrite: False,
-                address: perCfg.perIn,
-                datain: perCfg.perOut
-            };
-        perRam.portA.request.put(bramReq);
-    endrule
-    //---------------------------
-    // interface method
-    //---------------------------
-    interface lowMacTxSrv = toGPServer(lowMacTxReqQ, lowMacTxRespQ);
-    interface lowMacRxClt = toGPClient(lowMacRxReqQ, lowMacRxRespQ);
-    interface phyRegSrv   = toGPServer(phyRegReqQ, phyRegRespQ);
-    interface perSrv      = toGPServer(perTxReqQ, perTxRespQ);
-
-    interface phyTxClt    = toGPClient(phyTxReqQ, phyTxRespQ);
-    interface phyRxSrv    = toGPServer(phyRxReqQ, phyRxRespQ);
-
-    // interface phyStatusSrv = toGPServer(phyStatusReqQ, phyStatusRespQ);
-
+    interface lowMacTxSrv = toGPServer(lowMacTxReqQ,lowMacTxRespQ);
+    interface lowMacRxClt = toGPClient(lowMacRxReqQ,lowMacRxRespQ);
+    interface phyTxClt = toGPClient(phyTxReqQ,phyTxRespQ);
+    interface phyRegSrv = toGPServer(phyRegReqQ,phyRegRespQ);
+    interface perSrv = errors.perSrv;
+    interface Server phyRxSrv;
+        interface Put request;
+            method Action put(PhyEvent e);
+                incoming.enq(tuple2(e,clock)); phyRxRespQ.enq(GenericResp{});
+            endmethod
+        endinterface
+        interface response = toGet(phyRxRespQ);
+    endinterface
     interface Get getPhyStatus;
         method ActionValue#(PhyStatus) get;
-            return PhyStatus {
-                cca         : ccaBusyReg,
-                fcsEn       : rxEndReg,
-                fcsCorrect  : crcReg,
-                txStart     : txBeginReg,
-                txEnd       : txEndReg,
-                rxStart     : rxBeginReg,
-                rxEnd       : rxEndReg,
-                state       : stateReg
-            };
+            let p = getEmptyPhyStatus;
+            p.state=state; p.cca=cca; p.txStart=txStart; p.txEnd=txEnd; p.txExchangeId=txTag;
+            p.rxStart=rxStart; p.rxStartFrame=startedFrame; p.rxFrame=startedFrame;
+            if(decision matches tagged Valid .d) begin
+                p.rxFrame=d.frame; p.rxHeader=d.header && d.success;
+                p.rxEnd=!d.header; p.fcsEn=!d.header; p.fcsCorrect=d.success;
+            end
+            return p;
         endmethod
     endinterface
-endmodule
-
-
-// ================================== BinarySearchIFC ==============================
-typedef 4096 ROM_SIZE;
-    
-interface BinarySearchIFC;
-    method Action put(UInt#(32) target);
-    method ActionValue#(Int#(12)) get;  // 修改返回类型
-endinterface
-
-module mkBinarySearch(BinarySearchIFC);
-    // ROM接口
-    Rom1port#(UInt#(12), UInt#(32)) rom3 <- mkSingleRom("Lg.mem");
-    
-    // 状态寄存器
-    Reg#(UInt#(12))  lowReg         <- mkReg(0);
-    Reg#(UInt#(12))  highReg        <- mkReg(4095);
-    Reg#(UInt#(32))  targetReg      <- mkReg(0);
-    Reg#(UInt#(12))  midReg         <- mkReg(0);  
-    Reg#(Bool)       searchingReg   <- mkReg(False);
-    Reg#(Bool)       searchWaitReg  <- mkReg(False);
-    Reg#(UInt#(6))   stepReg        <- mkReg(0);
-    
-    FIFO#(UInt#(32)) inputQ         <- mkFIFO;
-    FIFO#(UInt#(12)) outputQ        <- mkFIFO;
-
-    // 主状态机规则
-    rule startSearch (!searchingReg);
-        let target = inputQ.first;
-        inputQ.deq;
-        targetReg    <= target;
-        lowReg       <= 0;
-        highReg      <= 4095;
-        stepReg      <= 0;        
-        searchingReg <= True;
-    endrule
-
-    rule search (searchingReg && !searchWaitReg);
-        UInt#(12) mid   = (lowReg >> 1) + (highReg >> 1);
-        if (stepReg < 12) begin
-            rom3.request.put(mid);
-            searchWaitReg  <= True;
-            stepReg  <=  stepReg + 1;
-            midReg   <=  mid;
-        end 
-        else begin
-            stepReg <= 0;
-            outputQ.enq(mid);
-            searchingReg   <= False;
-        end
-    endrule
-
-    rule handleResponse (searchingReg && searchWaitReg);
-        let data <- rom3.response.get;
-        searchWaitReg  <= False;
-        if (data < targetReg) begin
-            lowReg  <= midReg + 1;
-        end 
-        else if(data > targetReg)begin
-            highReg  <= midReg - 1;
-        end else begin
-            // $display("equal");
-        end 
-    endrule
-
-    method Action put(UInt#(32) target);
-        inputQ.enq(target);
-    endmethod
-
-    method ActionValue#((Int#(12))) get;
-        let data = outputQ.first;
-        outputQ.deq;
-        Int#(12) res = unpack(pack(data - 2048));
-        return res;
-    endmethod
-
-endmodule
-
-
-
-// ================================== LFSR ==============================
-//export mkRn_16;
-// We want 16-bit random numbers, so we will use the 16-bit version of
-// LFSR and take the most significant eight bits.
-// The interface for the random number generator is parameterized on bit
-// length. It is a "get" interface, defined in the GetPut package.
-
-// interface LFSR #(type a_type);
-//     method Action seed(a_type seed_value);
-//     method a_type value();
-//     method Action next();
-// endinterface: LFSR
-    
-typedef Get#(Bit#(n)) RandI#(type n);
-module mkRn_16(RandI#(16));
-    // First we instantiate the LFSR module
-    LFSR#(Bit#(16)) lfsr <- mkLFSR_16 ;
-    // Next comes a FIFO for storing the results until needed
-    FIFO#(Bit#(16)) fi <- mkFIFO ;
-    // A boolean flag for ensuring that we first seed the LFSR module
-    Reg#(Bool) starting <- mkReg(True) ;
-    // This rule fires first, and sends a suitable seed to the module.
-    rule start (starting);
-        starting <= False;
-        lfsr.seed('h11);
-    endrule: start
-    // After that, the following rule runs as often as it can, retrieving
-    // results from the LFSR module and enqueing them on the FIFO.
-    rule run (!starting);
-        fi.enq(lfsr.value[15:0]);
-        lfsr.next;
-    endrule: run
-    // The interface for mkRn_6 is a Get interface. We can produce this from a
-    // FIFO using the fifoToGet function. We therefore don’t need to define any
-    // new methods explicitly in this module: we can simply return the produced
-    // Get interface as the "result" of this module instantiation.
-    return fifoToGet(fi);
 endmodule

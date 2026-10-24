@@ -35,7 +35,7 @@ module mkTestPhy(Empty);
     //     let resp <- dut0.phyRxSrv.response.get;
     // endrule
 
-    rule send if (cycleCount % (fromInteger(valueOf(Send_delta_time_us))*200) == 0);
+    rule send if (cycleCount % (fromInteger(valueOf(Send_delta_time_us))*fromInteger(valueOf(US_CYCLES))) == 0);
         let cnt = cntCount;
         cntCount <= cntCount + 1;
         let txReq = getEmptyMacEvent;
@@ -45,7 +45,7 @@ module mkTestPhy(Empty);
         txReq.rfParam.mcs = 0;
         txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
         txReq.mpduDigest.length = 1000;
-        dut0.lowMacTxSrv.request.put(txReq);
+        dut0.lowMacTxSrv.request.put(toAirFrame(txReq, 0));
         $display("packet send%d",cnt);
     endrule
 
@@ -68,7 +68,7 @@ module mkTestPhy(Empty);
     //     txReq.rfParam.mcs = 7;
     //     txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
     //     txReq.mpduDigest.length = 1024;
-    //     dut0.lowMacTxSrv.request.put(txReq);
+    //     dut0.lowMacTxSrv.request.put(toAirFrame(txReq, 0));
     //     $display("packt1");
     // endrule
 
@@ -81,7 +81,7 @@ module mkTestPhy(Empty);
     //     txReq.rfParam.mcs = 7;
     //     txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
     //     txReq.mpduDigest.length = 1024;
-    //     dut0.lowMacTxSrv.request.put(txReq);
+    //     dut0.lowMacTxSrv.request.put(toAirFrame(txReq, 0));
     //     $display("packt2");
     // endrule
 
@@ -94,7 +94,7 @@ module mkTestPhy(Empty);
     //     txReq.rfParam.mcs = 7;
     //     txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
     //     txReq.mpduDigest.length = 1024;
-    //     dut0.lowMacTxSrv.request.put(txReq);
+    //     dut0.lowMacTxSrv.request.put(toAirFrame(txReq, 0));
     //     $display("packt3");
     // endrule
 
@@ -107,7 +107,7 @@ module mkTestPhy(Empty);
     //     txReq.rfParam.mcs = 7;
     //     txReq.mpduDigest.frameType = fromInteger(valueOf(FC_TYPE_DATA));
     //     txReq.mpduDigest.length = 1024;
-    //     dut0.lowMacTxSrv.request.put(txReq);
+    //     dut0.lowMacTxSrv.request.put(toAirFrame(txReq, 0));
     //     $display("packt4");
     // endrule
 

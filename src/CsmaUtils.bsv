@@ -27,10 +27,7 @@ typedef 20 RTS_MPDU_LEN;
 typedef 14 CTS_MPDU_LEN;
 typedef 14 ACK_MPDU_LEN;
 
-typedef 20 CYNC_MPDU_TIME_us;
-typedef 28 RTS_MPDU_TIME_us;
-typedef 20 CTS_MPDU_TIME_us;
-typedef 20 ACK_MPDU_TIME_us;
+// Airtimes are defined by FrameTiming, not control-frame constants.
 
 function Bool isMyFrame(Integer id, MacId dstMacId);
     return (fromInteger(id) == dstMacId);
@@ -95,6 +92,7 @@ endfunction
 
 // 指数增长随机退避窗口生成器
 interface ExpBackOffGenerator;
+    method ContWindowExp currentCW();
     method Action    incrCW();              // 碰撞后指数增长窗口
     method Action    resetCW();             // 成功接收窗口重置
     interface Get#(TimeSlot)  next;         // 获取下一个随机退避窗口大小
@@ -102,82 +100,34 @@ interface ExpBackOffGenerator;
 endinterface
 
 module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
-    FIFO#(TimeSlot)  resultQ  <- mkFIFO;
-    Reg#(Bool)       initReg  <- mkReg(False);
-    Reg#(MacConfig)  cfgReg   <- mkReg(getDefaultMacCfg);
+    Reg#(MacConfig) cfgReg <- mkReg(getDefaultMacCfg);
     Reg#(ContWindowExp) cwExpReg <- mkReg(getDefaultMacCfg.cwMin);
-  
-    LFSR#(Bit#(16))  lfsr        <- mkLFSR_16;
-    Reg#(Bit#(10))    randSeedReg <- mkReg(fromInteger(id));
-    // Reg#(Bit#(10))    randSeedReg <- mkReg(0);
-
-    rule init if (!initReg);
-        initReg <= True;
-        lfsr.seed(12345);  // Magic Number
-    endrule
-
-    rule genSeed if (initReg);
-        randSeedReg <= randSeedReg + 1;
-    endrule
-
-    rule generateBackoff if (initReg);
-        lfsr.next;  
-        let randVal = lfsr.value;
-        Bit#(10) randSlot = 0;
-        case (cwExpReg[3:0])
-          4'd0 : begin 
-                randSlot = 0;
-                end
-          4'd1 : begin 
-                randSlot = {9'h0,randVal[0]^randSeedReg[1]};
-                end
-          4'd2 : begin 
-                randSlot = {8'h0,randVal[1],randVal[0]};
-                end
-          4'd3 : begin 
-                randSlot = {7'h0,randVal[2]^randSeedReg[0],randVal[1]^randSeedReg[1],randVal[0]};
-                end
-          4'd4 : begin
-                randSlot = {6'h0,randVal[3],randVal[2]^randSeedReg[0],randVal[1]^randSeedReg[1],randVal[0]};
-                end
-          4'd5 : begin
-                randSlot = {5'h0,randVal[4]^randSeedReg[0],randVal[3],randVal[2]^randSeedReg[0],randVal[1]^randSeedReg[1],randVal[0]};
-                end
-          4'd6 : begin
-                randSlot = {4'h0,randVal[5],randVal[4],randVal[3],randVal[2]^randSeedReg[0],randVal[1],randVal[0]^randSeedReg[1]};
-                end
-          4'd7 : begin
-                randSlot = {3'h0,randVal[6],randVal[5]^randSeedReg[0],randVal[4],randVal[3],randVal[2],randVal[1]^randSeedReg[1],randVal[0]};
-                end
-          4'd8 : begin
-                randSlot = {2'h0,randVal[7],randVal[6]^randSeedReg[1],randVal[5],randVal[4]^randSeedReg[0],randVal[3],randVal[2],randVal[1],randVal[0]^randSeedReg[1]};
-                end
-          4'd9 : begin
-                randSlot = {1'h0,randVal[8],randVal[7]^randSeedReg[0],randVal[6],randVal[5]^randSeedReg[1],randVal[4],randVal[3]^randSeedReg[0],randVal[2],randVal[1]^randSeedReg[1],randVal[0]};
-                end
-          4'd10: begin
-                randSlot = {randVal[9],randVal[8]^randSeedReg[0],randVal[7]^randSeedReg[1],randVal[6],randVal[5],randVal[4]^randSeedReg[1],randVal[3],randVal[2],randVal[1]^randSeedReg[0],randVal[0]};
-                end                
-          default: begin
-                randSlot = {7'h0,randVal[2]^randSeedReg[0],randVal[1],randVal[0]^randSeedReg[1]};
-                end
-        endcase
-        resultQ.enq(zeroExtend(randSlot));
-    endrule
-
+    // Per-node nonzero sequence, advanced ONLY when a new sample is consumed.
+    Reg#(Bit#(16)) randomState <- mkReg(16'h1 ^ fromInteger(id * 4051));
     method Action incrCW();
-        cwExpReg <= (cwExpReg > cfgReg.cwMax) ? cfgReg.cwMax : cwExpReg + 1;
+        cwExpReg <= cwExpReg >= cfgReg.cwMax ? cfgReg.cwMax : cwExpReg + 1;
     endmethod
-
     method Action resetCW();
         cwExpReg <= cfgReg.cwMin;
     endmethod
-
-    interface next = toGet(resultQ);
-
+    interface Get next;
+        method ActionValue#(TimeSlot) get;
+            Bit#(16) mask = (1 << cwExpReg) - 1;
+            Bit#(16) nextState = (randomState >> 1) ^ (randomState[0] == 1 ? 16'hB400 : 0);
+            randomState <= nextState;
+            return randomState & mask;
+        endmethod
+    endinterface
+    method ContWindowExp currentCW() = cwExpReg;
     interface Put putmaccfg;
         method Action put(MacConfig cfg);
             cfgReg <= cfg;
+            if (cfg.cwMin != cfgReg.cwMin || cfg.cwMax != cfgReg.cwMax)
+                cwExpReg <= cfg.cwMin;
+            if (cfg.backoffSeed != cfgReg.backoffSeed) begin
+                Bit#(16) seed = cfg.backoffSeed ^ fromInteger(id * 4051);
+                randomState <= seed == 0 ? 1 : seed;
+            end
         endmethod
     endinterface
 endmodule
@@ -211,14 +161,22 @@ endmodule
 module mkSlotGen#(TimeGen usGen, Reg#(MacConfig) cfg)(TimeGen);
     Reg#(Bool)    slotTrigger <- mkDReg(False);
     Reg#(TimeUs)  usReg       <- mkReg(0);
+    Reg#(TimeUs)  slotReg     <- mkReg(getDefaultMacCfg.slot);
 
-    rule count if(usGen.get);
-        if (usReg == cfg.slot - 1) begin
+    rule count;
+        // Rebase when slot changes, including a reduction below usReg.
+        if (slotReg != cfg.slot) begin
+            slotReg <= cfg.slot;
             usReg <= 0;
-            slotTrigger <= True;
         end
-        else begin
-            usReg <= usReg + 1;
+        else if (usGen.get && cfg.slot != 0) begin
+            if (usReg >= cfg.slot - 1) begin
+                usReg <= 0;
+                slotTrigger <= True;
+            end
+            else begin
+                usReg <= usReg + 1;
+            end
         end
     endrule
 
