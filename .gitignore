@@ -1,6 +1,12 @@
 build
 output
-backend/verilog
+
+# Generated Verilog exports and Bluespec compiler artifacts
+/backend/verilog*/
+*.v
+*.ba
+*.bo
+
 generate
 .Xil
 *.log
