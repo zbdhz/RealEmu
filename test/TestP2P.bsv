@@ -15,7 +15,7 @@
 //   - node1/node0 MAC 寄存器对齐 ns-3 802.11a: timeout=70, cwMax=10,
 //     retryLimit=7; rtsThreshold 按 case 切换(off=65535, on=100)
 //
-// 时标: 200 cycles/us (Bluesim 周期 10ns, `BSIM 未传播到 src package)
+// 时标: Types.US_CYCLES（默认250）；模型µs=cycle/C，不能直接把$time当模型时间。
 //
 // 结构说明: 严格单写者 —— controller 是 phase/AXI-Lite 握手/发包的
 // 唯一规则; recvPacket 只写收包统计寄存器且不读 controller 的任何
@@ -218,7 +218,7 @@ module mkTestP2P(Empty);
                 if (lat > rttMax) rttMax <= lat;
             end
             $display("[P2P] rtt #%0d lat=%0d cycles (%0d us)",
-                     rttRcvCnt, lat, lat / 200);
+                     rttRcvCnt, lat, lat / fromInteger(valueOf(US_CYCLES)));
             if (rttRcvCnt + 1 == fromInteger(rttN)) begin
                 recvSeg <= RCV_DONE;
                 rttDone <= True;
@@ -369,13 +369,13 @@ module mkTestP2P(Empty);
         PH_REPORT: begin
             UInt#(64) bitsTotal = fromInteger(burstN * pktLen * 8);
             UInt#(64) dur = zeroExtend(thrT1 - thrT0);
-            UInt#(64) thrMbps = (dur == 0) ? 0 : (bitsTotal * 200 / dur);
+            UInt#(64) thrMbps = (dur == 0) ? 0 : (bitsTotal * fromInteger(valueOf(US_CYCLES)) / dur);
             UInt#(64) rttAvg = rttSum / fromInteger(rttN);
 
             $display("[P2P] RESULT, case=%0d, mcs=%0d, rts=%0d, recv=%0d/%0d, thr=%0d Mbps, rtt_min=%0d us, rtt_avg=%0d us, rtt_max=%0d us",
                      caseIdx, caseMcs(caseIdx), caseRtsOn(caseIdx) ? 1 : 0,
                      burstRcvCnt, burstN, thrMbps,
-                     rttMin / 200, rttAvg / 200, rttMax / 200);
+                     rttMin / fromInteger(valueOf(US_CYCLES)), rttAvg / fromInteger(valueOf(US_CYCLES)), rttMax / fromInteger(valueOf(US_CYCLES)));
             $display("[P2P]        detail: t0=%0d t1=%0d dur_cycles=%0d, rtt_cycles min=%0d avg=%0d max=%0d",
                      thrT0, thrT1, dur, rttMin, rttAvg, rttMax);
 

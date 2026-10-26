@@ -53,87 +53,76 @@ module mkCfgBridge(CfgBridgeIFC);
     Vector#(NODE_NUM, FIFOF#(PerCfg))       qPerTxReqQ   <- replicateM(mkFIFOF);
     Vector#(NODE_NUM, FIFOF#(GenericResp))  qPerTxRespQ  <- replicateM(mkFIFOF);
 
-    //======================================== channel ====================================
-    Reg#(Tuple2#(Bool, ChannelCfg)) deMuxReg2 <- mkDReg(tuple2(False, getEmptyChannelCfg));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs2 <- replicateM(mkDReg(False));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(ChannelCfg)) eventRegs2 <- replicateM(mkDReg(getEmptyChannelCfg));
+    // C02: 复用原两级分发结构，用 FIFO 保持事件直到下游接受。
+    FIFOF#(ChannelCfg) chanStage1 <- mkFIFOF;
+    FIFOF#(ChannelCfg) chanStage2 <- mkFIFOF;
+    Reg#(Bool) chanWaiting <- mkReg(False);
+    Reg#(PhyId) chanTarget <- mkReg(0);
 
-    // Level 1 MUX（1节点→32组，粗略广播）
     rule txProcess;
-        let txReq = pcieTxReqQ.first;
+        chanStage1.enq(pcieTxReqQ.first);
         pcieTxReqQ.deq;
-        pcieTxRespQ.enq(GenericResp{});
-        deMuxReg2 <= tuple2(True, txReq);
     endrule
-
     rule txBroadcast;
-        let {valid, txChannelCfg} = deMuxReg2;
-        // 上游信号广播到各组
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            validRegs2[g] <= valid;
-            eventRegs2[g] <= txChannelCfg;
-        end
+        chanStage2.enq(chanStage1.first);
+        chanStage1.deq;
     endrule
-
-    // Level 2 MUX（各组父节点→子节点，精准匹配）
-    rule txSend;
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            for (Integer gr = 0; gr < valueOf(GROUP_SIZE); gr = gr + 1) begin
-                let index = g*valueOf(GROUP_SIZE) + gr;
-                let valid = validRegs2[g];
-                let txChannelCfg = eventRegs2[g];
-                if (valid && txChannelCfg.dstPhyId == fromInteger(index)) begin
-                    qChanTxReqQ[index].enq(txChannelCfg);
-                end
+    rule txSend (!chanWaiting);
+        let cfg = chanStage2.first;
+        if (cfg.dstPhyId < fromInteger(valueOf(NODE_NUM))) begin
+            for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+                if (cfg.dstPhyId == fromInteger(i)) qChanTxReqQ[i].enq(cfg);
             end
+            chanTarget <= cfg.dstPhyId;
+            chanWaiting <= True;
         end
+        else pcieTxRespQ.enq(GenericResp{}); // 无效节点不产生写入，也不能占住流水。
+        chanStage2.deq;
     endrule
-
-    for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1)begin
-        rule handshakeTx;
+    for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+        rule handshakeTx (chanWaiting && chanTarget == fromInteger(i));
             qChanTxRespQ[i].deq;
+            // 响应来自目标 BRAM 写完成，不再把入口接收当成配置生效。
+            pcieTxRespQ.enq(GenericResp{});
+            chanWaiting <= False;
         endrule
     end
-    //======================================== per ====================================
-    Reg#(Tuple2#(Bool, PerCfg)) deMuxReg3 <- mkDReg(tuple2(False, getEmptyPerCfg));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs3 <- replicateM(mkDReg(False));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(PerCfg)) eventRegs3 <- replicateM(mkDReg(getEmptyPerCfg));
-    // Level 1 MUX（1节点→32组，粗略广播）
+
+    FIFOF#(PerCfg) perStage1 <- mkFIFOF;
+    FIFOF#(PerCfg) perStage2 <- mkFIFOF;
+    Reg#(Bool) perWaiting <- mkReg(False);
+    Reg#(Bit#(NODE_NUM)) perAckMask <- mkReg(0);
     rule txProcessPer;
-        let txReq = pcieTxPerReqQ.first;
+        perStage1.enq(pcieTxPerReqQ.first);
         pcieTxPerReqQ.deq;
-        pcieTxPerRespQ.enq(GenericResp{});
-        deMuxReg3 <= tuple2(True, txReq);
     endrule
-
     rule txBroadcastPer;
-        let {valid, txPerCfg} = deMuxReg3;
-        // 上游信号广播到各组
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            validRegs3[g] <= valid;
-            eventRegs3[g] <= txPerCfg;
-        end
+        perStage2.enq(perStage1.first);
+        perStage1.deq;
     endrule
-
-    // Level 2 MUX（各组父节点→子节点，精准匹配）
-    rule txSendPer;
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            for (Integer gr = 0; gr < valueOf(GROUP_SIZE); gr = gr + 1) begin
-                let index = g*valueOf(GROUP_SIZE) + gr;
-                let valid = validRegs3[g];
-                let txPerCfg = eventRegs3[g];
-                if (valid) begin
-                    qPerTxReqQ[index].enq(txPerCfg);
-                end
+    rule txSendPer (!perWaiting);
+        let cfg = perStage2.first;
+        // 原子广播：任何节点满都保留整条配置，避免部分投递后的重放/重复。
+        for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1)
+            qPerTxReqQ[i].enq(cfg);
+        perStage2.deq;
+        perWaiting <= True;
+        perAckMask <= 0;
+    endrule
+    rule handshakePerTx (perWaiting);
+        Bit#(NODE_NUM) nextMask = perAckMask;
+        for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+            if (qPerTxRespQ[i].notEmpty) begin
+                qPerTxRespQ[i].deq;
+                nextMask[i] = 1;
             end
         end
+        perAckMask <= nextMask;
+        if (nextMask == '1) begin
+            pcieTxPerRespQ.enq(GenericResp{});
+            perWaiting <= False;
+        end
     endrule
-
-    for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1)begin
-        rule handshakePerTx;
-            qPerTxRespQ[i].deq;
-        endrule
-    end
 
     //接口实现
     Vector#(NODE_NUM, ChanClt)  qchanTxClt;

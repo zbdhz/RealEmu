@@ -89,7 +89,7 @@ module mkTestRawEmuCore_collision(Empty);
     endrule
 
     // ==================== 发包规则 ====================//原生包发送（任务）
-    rule send1 if(initialized && logFile != InvalidFile && (cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0)||(cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200) == 0));
+    rule send1 if(initialized && logFile != InvalidFile && (cycleCount % (fromInteger(valueOf(Send_Delta_Time))*fromInteger(valueOf(US_CYCLES))) == 0)||(cycleCount % (fromInteger(valueOf(Send_Delta_Time))*fromInteger(valueOf(US_CYCLES))) == 0));
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 1;
         txReq.dstMacId = 0;
@@ -114,7 +114,7 @@ module mkTestRawEmuCore_collision(Empty);
     endrule
 
     // ==================== 发包规则 ====================//干扰包发送（任务）
-    rule send2 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*200)== 5*200);
+    rule send2 if(initialized && logFile != InvalidFile && cycleCount % (fromInteger(valueOf(Send_Delta_Time))*fromInteger(valueOf(US_CYCLES)))== 5*fromInteger(valueOf(US_CYCLES)));
         let txReq = getEmptyMacEvent;
         txReq.srcMacId = 2;
         txReq.dstMacId = 0;

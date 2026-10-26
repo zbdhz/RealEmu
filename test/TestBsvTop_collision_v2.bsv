@@ -15,7 +15,7 @@
 //   d=1023 -> loss 1926 -> rx 74   (2.3dBm)   弱帧(隐藏)
 // PER: mem/Per.mem 默认表, 强帧 SYNC(idx1119)/RX(highSNR) 均 FFFF 必过,
 //      弱帧 SINR<lowSNR -> idx0 = 0 必败. 无需灌表.
-// 时标: 200 cycles/us (clkFreq=200MHz, 1cycle=5ns? Bluesim $time=ns).
+// 时标: Types.US_CYCLES；保留原200周期基准的注入间隔，按统一时基缩放。
 // ============================================================================
 
 import GetPut::*;
@@ -34,6 +34,10 @@ Int#(12) txPower = fromInteger(2000);
 // 32*20lg(d) 预计算 (与 mem/20lgd.mem 一致, 由 python 生成校验值)
 Int#(12) lossNear = fromInteger(578);   // 32*20lg(8)  = 578
 Int#(12) lossFar  = fromInteger(1926);  // 32*20lg(1023)= 1926
+
+function UInt#(64) caseCycles(Integer oldCycles);
+    return fromInteger(oldCycles * valueOf(US_CYCLES) / 200);
+endfunction
 
 module mkTestRawEmuCore_collision_v2(Empty);
 
@@ -94,10 +98,10 @@ module mkTestRawEmuCore_collision_v2(Empty);
     Reg#(UInt#(32)) failCnt <- mkReg(0);
 
     // T1 @ 1000: 单发强帧; @ 1000+45000 判定
-    rule t1_fire (cycleCount == 1000);
+    rule t1_fire (cycleCount == caseCycles(1000));
         inject(1, pNear);
     endrule
-    rule t1_check (cycleCount == 1000 + 45000 && t1done == 0);
+    rule t1_check (cycleCount == caseCycles(1000 + 45000) && t1done == 0);
         t1done <= 1;
         if (recvOk == 1) begin passCnt <= passCnt + 1;
             $display("[V2] T1 staggered-ok PASS (recvOk=%0d)", recvOk);
@@ -108,13 +112,13 @@ module mkTestRawEmuCore_collision_v2(Empty);
     endrule
 
     // T2 @ 100000: 强帧A; @ +6000 强帧B (SYNC 20us 中段重叠); @ +45000 判定
-    rule t2_fireA (cycleCount == 100000);
+    rule t2_fireA (cycleCount == caseCycles(100000));
         inject(1, pNear);
     endrule
-    rule t2_fireB (cycleCount == 106000);
+    rule t2_fireB (cycleCount == caseCycles(106000));
         inject(2, pNear);
     endrule
-    rule t2_check (cycleCount == 100000 + 45000 && t2done == 0);
+    rule t2_check (cycleCount == caseCycles(100000 + 45000) && t2done == 0);
         t2done <= 1;
         let got = recvOk - t1cnt;
         if (got == 0) begin passCnt <= passCnt + 1;
@@ -126,10 +130,10 @@ module mkTestRawEmuCore_collision_v2(Empty);
     endrule
 
     // T3 @ 200000: 单发弱帧; @ +45000 判定 (无 SYNC, 无 CCA, 无接收)
-    rule t3_fire (cycleCount == 200000);
+    rule t3_fire (cycleCount == caseCycles(200000));
         inject(2, pFar);
     endrule
-    rule t3_check (cycleCount == 200000 + 45000 && t3done == 0);
+    rule t3_check (cycleCount == caseCycles(200000 + 45000) && t3done == 0);
         t3done <= 1;
         let got = recvOk - t2cnt;
         if (got == 0) begin passCnt <= passCnt + 1;
@@ -141,13 +145,13 @@ module mkTestRawEmuCore_collision_v2(Empty);
     endrule
 
     // T4 @ 300000: 强帧; +6000 弱帧; @ +45000 判定 -> 强帧应 CRC OK
-    rule t4_fireA (cycleCount == 300000);
+    rule t4_fireA (cycleCount == caseCycles(300000));
         inject(1, pNear);
     endrule
-    rule t4_fireB (cycleCount == 306000);
+    rule t4_fireB (cycleCount == caseCycles(306000));
         inject(2, pFar);
     endrule
-    rule t4_check (cycleCount == 300000 + 45000 && t4done == 0);
+    rule t4_check (cycleCount == caseCycles(300000 + 45000) && t4done == 0);
         t4done <= 1;
         let got = recvOk - t3cnt;
         if (got == 1) begin passCnt <= passCnt + 1;
@@ -158,7 +162,7 @@ module mkTestRawEmuCore_collision_v2(Empty);
         t4cnt <= recvOk;
     endrule
 
-    rule simEnd (cycleCount == 350000);
+    rule simEnd (cycleCount == caseCycles(350000));
         $display("[V2] ================= SUMMARY =================");
         $display("[V2] pass=%0d fail=%0d", passCnt, failCnt);
         $display("[V2] %s",

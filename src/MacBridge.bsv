@@ -68,16 +68,17 @@ module mkMacBridge(MacBridgeIFC);
     ///////////////////////////////////////////////////////////////////////////
     // 轮询控制逻辑（保持原始结构）
     ///////////////////////////////////////////////////////////////////////////
-    Reg#(Tuple2#(Bool, MacEvent)) deMuxReg1 <- mkDReg(tuple2(False, getEmptyMacEvent));
+    // C02: 上传队列保留选中事件，直到 PCIe 输出 FIFO 真正接受。
+    FIFOF#(MacEvent) deMuxReg1 <- mkFIFOF;
     // Reg#(Tuple2#(Bool, MacEvent)) deMuxRegs <- mkDReg(tuple2(False, getEmptyMacEvent));
 
     ///////////////////////////////////////////////////////////////////////////
     // 32叉树聚合逻辑
     ///////////////////////////////////////////////////////////////////////////
     Reg#(MuxState) rxmuxState <- mkReg(MuxBegin);
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacId))    macIdRegs1  <- replicateM(mkDReg(0));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs1 <- replicateM(mkDReg(False));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacEvent)) eventRegs1 <- replicateM(mkDReg(getEmptyMacEvent));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacId))    macIdRegs1  <- replicateM(mkReg(0));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs1 <- replicateM(mkReg(False));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacEvent)) eventRegs1 <- replicateM(mkReg(getEmptyMacEvent));
 
     // Level 1 MUX（32节点→1节点）
     rule muxBegin if (rxmuxState == MuxBegin);
@@ -124,7 +125,7 @@ module mkMacBridge(MacBridgeIFC);
             end
         end
 
-        deMuxReg1 <= tuple2(finalValid, finalEvent);
+        if (finalValid) deMuxReg1.enq(finalEvent);
         rxmuxState <= MuxBegin;
         if(finalValid && qMacRxReqQ[selectId].notEmpty)begin
             qMacRxReqQ[selectId].deq;
@@ -138,12 +139,8 @@ module mkMacBridge(MacBridgeIFC);
     ///////////////////////////////////////////////////////////////////////////
 
     rule rxupload;
-        let {valid, rxEvent} = deMuxReg1;
-        if(valid)begin
-            pcieRxReqQ.enq(rxEvent);
-            // $display("rx_upload: %x", rxEvent);
-        end
-    
+        pcieRxReqQ.enq(deMuxReg1.first);
+        deMuxReg1.deq;
     endrule
 
     rule handshakeRx;
@@ -154,43 +151,26 @@ module mkMacBridge(MacBridgeIFC);
     ///////////////////////////////////////////////////////////////////////////
     //代办：增加有效的数据判断，所有事件下发时为valid-ture，不处理则为非
     // Reg#(MacEvent)) deMuxReg2 <- mkDReg(getEmptyMacEvent);
-    // Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacEvent)) eventRegs2 <- replicateM(mkDReg(getEmptyMacEvent));
-    // Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs2 <- replicateM(mkDReg(False));
-    Reg#(Tuple2#(Bool, MacEvent)) deMuxReg2 <- mkDReg(tuple2(False, getEmptyMacEvent));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs2 <- replicateM(mkDReg(False));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacEvent)) eventRegs2 <- replicateM(mkDReg(getEmptyMacEvent));
-    // Level 1 MUX（1节点→32组，粗略广播）
+    // Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(MacEvent)) eventRegs2 <- replicateM(mkReg(getEmptyMacEvent));
+    // Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs2 <- replicateM(mkReg(False));
+    // C02: 两级下传保持原路径，FIFO 自然传播背压，valid 不再只保持一拍。
+    FIFOF#(MacEvent) txStage1 <- mkFIFOF;
+    FIFOF#(MacEvent) txStage2 <- mkFIFOF;
     rule txProcess;
-        let txReq = pcieTxReqQ.first;
+        txStage1.enq(pcieTxReqQ.first);
         pcieTxReqQ.deq;
-        // $display("macbrigdge rx ok!!!");
         pcieTxRespQ.enq(GenericResp{});
-        deMuxReg2 <= tuple2(True, txReq);
     endrule
-
     rule txBroadcast;
-        let {valid, txEvent} = deMuxReg2;
-        // 上游信号广播到各组
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            validRegs2[g] <= valid;
-            eventRegs2[g] <= txEvent;
-            // $display("macbridge tx_broadcast OK! srcMacId: %x",txEvent.srcMacId);
-        end
+        txStage2.enq(txStage1.first);
+        txStage1.deq;
     endrule
-
-    // Level 2 MUX（各组父节点→子节点，精准匹配）
     rule txSend;
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            for (Integer gr = 0; gr < valueOf(GROUP_SIZE); gr = gr + 1) begin
-                let index = g*valueOf(GROUP_SIZE) + gr;
-                let valid = validRegs2[g];
-                let txEvent = eventRegs2[g];
-                if (valid && txEvent.srcMacId == fromInteger(index)) begin
-                    qMacTxReqQ[index].enq(txEvent);
-                    // $display("macbrigdge tx ok!!!");
-                end
-            end
+        let evt = txStage2.first;
+        for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+            if (evt.srcMacId == fromInteger(i)) qMacTxReqQ[i].enq(evt);
         end
+        txStage2.deq;
     endrule
 
     for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1)begin

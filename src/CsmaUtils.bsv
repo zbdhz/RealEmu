@@ -166,7 +166,7 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
     endrule
 
     method Action incrCW();
-        cwExpReg <= (cwExpReg > cfgReg.cwMax) ? cfgReg.cwMax : cwExpReg + 1;
+        cwExpReg <= (cwExpReg >= cfgReg.cwMax) ? cfgReg.cwMax : cwExpReg + 1;
     endmethod
 
     method Action resetCW();
@@ -178,6 +178,9 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
     interface Put putmaccfg;
         method Action put(MacConfig cfg);
             cfgReg <= cfg;
+            // C01: 配置生效时重置当前窗口并丢弃旧配置下预取的样本。
+            cwExpReg <= cfg.cwMin;
+            resultQ.clear;
         endmethod
     endinterface
 endmodule
@@ -211,14 +214,22 @@ endmodule
 module mkSlotGen#(TimeGen usGen, Reg#(MacConfig) cfg)(TimeGen);
     Reg#(Bool)    slotTrigger <- mkDReg(False);
     Reg#(TimeUs)  usReg       <- mkReg(0);
+    Reg#(TimeUs)  appliedSlot <- mkReg(getDefaultMacCfg.slot);
 
-    rule count if(usGen.get);
+    rule count;
+        // C01: 缩短 slot 时不能让旧相位越过比较点，绕一整圈才再产生 tick。
+        if (appliedSlot != cfg.slot) begin
+            appliedSlot <= cfg.slot;
+            usReg <= 0;
+        end
+        else if (usGen.get) begin
         if (usReg == cfg.slot - 1) begin
             usReg <= 0;
             slotTrigger <= True;
         end
         else begin
             usReg <= usReg + 1;
+        end
         end
     endrule
 

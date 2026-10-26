@@ -242,7 +242,12 @@ typedef struct {
 typedef Server#(MacEvent, GenericResp) MacSrv;
 typedef Client#(MacEvent, GenericResp) MacClt;
 
-typedef 200 US_CYCLES;
+// T01: XDMA user_clk 为 250 MHz；MAC、PHY、测试只从这里取得 cycles/µs。
+// 显式覆盖用于时基回归，综合/打包脚本必须核对它与实际 AXI 时钟一致。
+`ifndef REALEMU_US_CYCLES
+`define REALEMU_US_CYCLES 250
+`endif
+typedef `REALEMU_US_CYCLES US_CYCLES;
 
 
 // ========================================= Phy Types ====================================

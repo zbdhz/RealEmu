@@ -128,6 +128,9 @@ module mkNav#(
     Reg#(Duration)           navReg                  <- mkReg(0);
     Reg#(Duration)           newNavReg               <- mkDReg(0);
     Reg#(MacConfig)          macCfg                  <- mkReg(getDefaultMacCfg);
+    // T02/C01: 乘积只随配置变化，应用配置时同步缓存，避免收帧路径串联 DSP、加法和比较。
+    // 保持原 TimeUs 的 16 位算术和 NAV 公式，不给接收事件增加等待状态。
+    Reg#(TimeUs) navSymbolBudget <- mkReg(getDefaultMacCfg.ofdmSymbolTime * getDefaultMacCfg.maxNum);
     
     // --------------------- 内部逻辑 ---------------------
     // RTS超时检测以及等待nav
@@ -143,7 +146,7 @@ module mkNav#(
     endrule
 
     method Action handleFrame(MacEvent frame);
-        Duration timeoutThresholdReg = zeroExtend(2 * macCfg.sifs + 2 * macCfg.slot + macCfg.sigTime + macCfg.ofdmSymbolTime * macCfg.maxNum + macCfg.phyDelayTime); //参考openwifi
+        Duration timeoutThresholdReg = zeroExtend(2 * macCfg.sifs + 2 * macCfg.slot + macCfg.sigTime + navSymbolBudget + macCfg.phyDelayTime); //参考openwifi
         // 处理Duration字段
         if (frame.mpduDigest.duration[15] == 0) begin
             // $display("my id:%0d, duration = %0d",id,frame.mpduDigest.duration[14:0]);
@@ -175,6 +178,7 @@ module mkNav#(
     interface Put putmaccfg;
         method Action put(MacConfig cfg);
             macCfg <= cfg;
+            navSymbolBudget <= cfg.ofdmSymbolTime * cfg.maxNum;
         endmethod
     endinterface
 endmodule
@@ -199,7 +203,8 @@ module mkCsmaCaBackOff#(
     Integer id
 )(CsmaBackOff_IFC);
     Reg#(CsmaState)  csmaStateReg           <- mkReg(CSMA_IDLE);
-    Reg#(Bool)       isSendAllowReg         <- mkDReg(False);
+    // D03: 完成许可保持到 MAC 确认，不能因寄存器访问或发送队列背压丢一拍 done。
+    Reg#(Bool)       isSendAllowReg         <- mkReg(False);
 
     Reg#(TimeUs)     waitTimeIFSReg         <- mkReg(0);
     Reg#(TimeSlot)   waitTimeReg            <- mkReg(0);
@@ -215,7 +220,7 @@ module mkCsmaCaBackOff#(
     let              navController          <- mkNav(usGen, id); 
     
     Reg#(TimeUs) suspendTimer <- mkReg(0);
-    rule csmaFSM;
+    rule csmaFSM (csmaStateReg != CSMA_DONE);
 
         case (csmaStateReg)
 
@@ -312,12 +317,20 @@ module mkCsmaCaBackOff#(
                 // else do nothing
             end
 
-            CSMA_DONE: begin
-                isSendAllowReg   <= True;
-                csmaStateReg     <= CSMA_IDLE;
-                waitTimeReg      <= 0;  // 重置退避计数器
-            end
         endcase
+    endrule
+
+    // DONE 单独成规则，避免确认握手把发送规则和随机数/IFS 更新形成调度环。
+    rule holdBackoffDone (csmaStateReg == CSMA_DONE);
+        if (resetWire) begin
+            // MAC 成功消费 done 后复用 softRst 确认；取消也走同一清理入口。
+            isSendAllowReg <= False;
+            csmaStateReg <= CSMA_IDLE;
+            waitTimeReg <= 0;
+        end
+        else begin
+            isSendAllowReg <= True;
+        end
     endrule
 
     // 启动一次退避
@@ -363,6 +376,7 @@ module mkCsmaCaBackOff#(
         method Action put(MacConfig macCfg);
             macCfgReg <= macCfg;
             expBackOffGen.putmaccfg.put(macCfg);
+            navController.putmaccfg.put(macCfg); // C01: NAV 与 IFS/CW 使用同一份已应用配置。
         endmethod
     endinterface
 
@@ -409,14 +423,52 @@ module mkMacDCF#(Integer id)(MacCore);
     Reg#(RetryTime)      retransCountReg    <- mkReg(0);
     Reg#(TimeUs)         ackTimeoutCountReg <- mkReg(0);
     Reg#(TimeUs)         ctsTimeoutCountReg <- mkReg(0);
+    // D02: 计时只由独立规则写入，寄存器访问及 RX/TX 队列背压不能抢掉 txEnd。
+    Reg#(UInt#(3))       pendingTxCountReg  <- mkReg(0);
+    Reg#(Bool)           responseWaitReg    <- mkReg(False);
+    PulseWire           beginMacTx  <- mkPulseWire;
+    PulseWire           armResponseWait    <- mkPulseWire;
+    PulseWire           clearResponseWait  <- mkPulseWire;
 
-`ifdef BSIM
-    TimeGen              usGen              <- mkUsGen(1);
-`else
-    TimeGen              usGen              <- mkUsGen(200);
-`endif
+    // T01: 仿真和硬件共享模型时基，BSIM 不再偷偷改变协议时间。
+    TimeGen              usGen              <- mkUsGen(valueOf(US_CYCLES));
     TimeGen              slotGen            <- mkSlotGen(usGen, macCfgReg);
     let                  backOffFsm         <- mkCsmaCaBackOff(phyStatusWire, usGen, slotGen, id);
+
+    rule updateResponseTimeouts;
+        // 只有 RTS/DATA 需要等应答；控制 ACK/CTS 的 txEnd 不能启动下一帧的计时。
+        if (armResponseWait) responseWaitReg <= True;
+        else if (clearResponseWait) responseWaitReg <= False;
+
+        // 保留原控制帧缓冲，只计尚未结束的本机 TX，不保存新的帧表。
+        // 原两级深2 FIFO加当前TX最多5笔，3位足够；同拍入队/结束净变化为0。
+        if (beginMacTx && !phyStatusWire.txEnd)
+            pendingTxCountReg <= pendingTxCountReg + 1;
+        else if (!beginMacTx && phyStatusWire.txEnd && pendingTxCountReg != 0)
+            pendingTxCountReg <= pendingTxCountReg - 1;
+
+        if (beginMacTx) begin
+            // 本次帧已入发送队列；排队和本帧空口时间不计入应答 timeout。
+            ackTimeoutCountReg <= 0;
+            ctsTimeoutCountReg <= 0;
+        end
+        else if (clearResponseWait) begin
+            ackTimeoutCountReg <= 0;
+            ctsTimeoutCountReg <= 0;
+        end
+        else if (responseWaitReg && pendingTxCountReg != 0 && phyStatusWire.txEnd && ackTimeoutCountReg == 0) begin
+            // 独立采到发送完成后只启动一次；DCF 即使本拍被阻塞也不会漏掉事件。
+            ackTimeoutCountReg <= 1;
+            ctsTimeoutCountReg <= 1;
+        end
+        else if (responseWaitReg && usGen.get) begin
+            // 到期后保持，避免 DCF 暂时受阻时计数回绕为 0，重新失去超时能力。
+            if (ackTimeoutCountReg != 0 && ackTimeoutCountReg != maxBound)
+                ackTimeoutCountReg <= ackTimeoutCountReg + 1;
+            if (ctsTimeoutCountReg != 0 && ctsTimeoutCountReg != maxBound)
+                ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
+        end
+    endrule
 
     rule phyHandShake;
         lowMacTxRespQ.deq;
@@ -442,7 +494,8 @@ module mkMacDCF#(Integer id)(MacCore);
         lowMacRxRespQ.enq(GenericResp{});
     endrule
 
-    (* descending_urgency = "txRegcopy, rxRegcopy" *)    
+    // D03: 先消费已完成的退避；持续入队不能饿死等待发送的队头。
+    (* descending_urgency = "dcfWaitBackOff, txRegcopy, rxRegcopy" *)
     rule txRegcopy;
         if(highMacTxReqQ.notEmpty && innerhighMacTxReqQ.notFull) begin
             let txReq = highMacTxReqQ.first;
@@ -472,7 +525,7 @@ module mkMacDCF#(Integer id)(MacCore);
         rule dcfFsmIdle if (dcfStateReg == DCF_IDLE);
             let nextTask = nextTaskReg;
             let state = DCF_IDLE;
-            ackTimeoutCountReg <= 0;
+            clearResponseWait.send;
             // Phy->lowMac接收队列非空, 进入接收处理逻辑
             if (lowMacRxYesToMEReqQ.notEmpty) begin
                 // $display("lowMacRxYesToMEReqQ.notEmpty");
@@ -515,7 +568,6 @@ module mkMacDCF#(Integer id)(MacCore);
                         end
                         else begin
                             nextTask = NT_SEND_DATA;
-                            ctsTimeoutCountReg <= 0;
                         end
                         state = DCF_WAIT_BACKOFF;
                     end
@@ -554,10 +606,14 @@ module mkMacDCF#(Integer id)(MacCore);
         endrule
 
         // 等待退避机制结束
-        rule dcfWaitBackOff if (dcfStateReg == DCF_WAIT_BACKOFF);
-            if (backOffFsm.done) begin
+        // D02: 新的 RTS/DATA 等旧控制帧全部发完，避免把旧 txEnd 归到新应答等待。
+        // CTS/ACK 仍可按原路径排队，不削减原缓冲能力。
+        rule dcfWaitBackOff if (dcfStateReg == DCF_WAIT_BACKOFF && backOffFsm.done &&
+            ((nextTaskReg != NT_SEND_RTS && nextTaskReg != NT_SEND_DATA) || pendingTxCountReg == 0));
                 case (nextTaskReg)
                 NT_SEND_RTS: begin
+                    // D03: 确认与发送入队处于同一原子规则；入队受阻时 done 继续保持。
+                    backOffFsm.softRst;
                     // 第一次BackOff，发送RTS帧
                     // BUG-B fix: 发起自己发送前, 丢弃队头残留的迟到 CTS/ACK
                     if (lowMacRxYesToMEReqQ.notEmpty) begin
@@ -574,9 +630,11 @@ module mkMacDCF#(Integer id)(MacCore);
                     nextTaskReg <= NT_RECV_CTS;
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send RTS", id));
                     $display("[%8d ns] send rts pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
-                    ctsTimeoutCountReg <= 0;
+                    beginMacTx.send;
+                    armResponseWait.send;
                     end
                 NT_SEND_DATA: begin
+                    backOffFsm.softRst;
                     if(ctsTimeoutCountReg >= macCfgReg.timeout) begin
                         dcfStateReg <= DCF_IDLE;
                         nextTaskReg <= NT_IDLE;
@@ -610,14 +668,16 @@ module mkMacDCF#(Integer id)(MacCore);
                         let refFrame = innerhighMacTxReqQ.first;
                         refFrame.mpduDigest.duration = macCfgReg.sifs+ fromInteger(valueOf(CYNC_MPDU_TIME_us)) + fromInteger(valueOf(ACK_MPDU_TIME_us));//待完善 10： SIFS; 48: synctime;  20: acktime
                         lowMacTxReqQ.enq(refFrame);
+                        beginMacTx.send;
+                        armResponseWait.send;
                         dcfStateReg <= DCF_RECV_CTSACK;
                         nextTaskReg <= NT_RECV_ACK;
                         // immLog("mkMacDcf", "dcfFSM", $format("[%8d ns] Id %5d, Send Data", id, id));
                         $display("[%8d ns] send data pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id,refFrame.dstMacId);
                     end
-                    ctsTimeoutCountReg <= 0;
                 end
                 NT_SEND_CTS: begin
+                    backOffFsm.softRst;
                     // 回复CTS
                     let refFrame = lowMacRxYesToMEReqQ.first;
                     refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
@@ -626,6 +686,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     // lowMacRxRespQ.enq(GenericResp{});
                     let ctsFrame = setCtsFrame(id, refFrame);
                     lowMacTxReqQ.enq(ctsFrame);
+                    beginMacTx.send;
                     dcfStateReg <= DCF_IDLE;
                     nextTaskReg <= NT_RECV_DATA;
                     // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send CTS", id));
@@ -634,6 +695,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 NT_SEND_ACK: begin
                     // 回复ACK
                     if(lowMacRxYesToMEReqQ.notEmpty) begin
+                        backOffFsm.softRst;
                         let refFrame = lowMacRxYesToMEReqQ.first;
                         refFrame.rfParam.power = lasthighMacTxReq.rfParam.power;
                         refFrame.mpduDigest.duration = 0;
@@ -641,6 +703,7 @@ module mkMacDCF#(Integer id)(MacCore);
                         // lowMacRxRespQ.enq(GenericResp{});
                         let ackFrame = setAckFrame(id, refFrame);
                         lowMacTxReqQ.enq(ackFrame);
+                        beginMacTx.send;
                         dcfStateReg <= DCF_IDLE;
                         nextTaskReg <= NT_IDLE;
                         $display("[%8d ns] send ACK pkt in mac layer, my mac id is %d, dst mac id is %d",$time, id, ackFrame.dstMacId);
@@ -648,43 +711,12 @@ module mkMacDCF#(Integer id)(MacCore);
                 // immLog("mkMacDcf", "dcfFSM", $format("Id %5d, Send ACK", id));
                 end
                 endcase
-            end 
-            //需要补充逻辑，就算是在非done部分收到发给自己的帧，也需要处理。回idle重新开始
-            else if(ctsTimeoutCountReg != 0)begin
-                if (usGen.get)
-                    ctsTimeoutCountReg <= ctsTimeoutCountReg + 1;
-            end
         endrule
 
         // 等待对端反馈
         rule dcfRecvCtsAck if (dcfStateReg == DCF_RECV_CTSACK);
             let nextTask = nextTaskReg;
             let state = dcfStateReg;
-            let ctsCnt = ctsTimeoutCountReg;  // BUG-A fix: 局部累积, 末尾单点写回, 避免同规则双写冲突
-            // if (usGen.get)
-            if(ackTimeoutCountReg == 0)begin
-                if(phyStatusWire.txEnd == True) begin
-                        ackTimeoutCountReg <= ackTimeoutCountReg + 1;
-                        $display("reset ackTimeoutCountReg: %d\n", ackTimeoutCountReg);
-                end
-            end
-            if(ackTimeoutCountReg != 0)begin
-                if (usGen.get)
-                ackTimeoutCountReg <= ackTimeoutCountReg + 1;
-            end
-
-            if(ctsTimeoutCountReg == 0)begin
-                if(phyStatusWire.txEnd == True) begin
-                        ctsCnt = ctsCnt + 1;
-                        $display("reset ctsTimeoutCountReg: %d\n", ctsTimeoutCountReg);
-                end
-            end
-            if(ctsTimeoutCountReg != 0)begin
-                if (usGen.get)
-                ctsCnt = ctsCnt + 1;
-            end
-            
-                // ackTimeoutCountReg <= ackTimeoutCountReg + 1;
             if (lowMacRxYesToMEReqQ.notEmpty) begin
                 let rxReq = lowMacRxYesToMEReqQ.first;
                 if (isMyFrame(id, rxReq.dstMacId) && isCtsFrame(rxReq.mpduDigest)) begin
@@ -693,7 +725,7 @@ module mkMacDCF#(Integer id)(MacCore);
                     $display("[%8d ns] recv cts pkt in mac layer, my mac id is %d, src mac id is %d",$time, id,rxReq.srcMacId);
                     lowMacRxYesToMEReqQ.deq;
                     // lowMacRxRespQ.enq(GenericResp{});
-                    ctsCnt = 0; // BUG-A fix: RTS->CTS 段结束, DATA->ACK 段由 ackTimeoutCountReg 独立计时
+                    // RTS 等待在下方统一清理；DATA 入队后重新等待其 txEnd。
                     state = DCF_IDLE;
                     nextTask = NT_SEND_DATA;
                 end
@@ -765,7 +797,7 @@ module mkMacDCF#(Integer id)(MacCore);
                 end
                 //更新NAV
             end
-            ctsTimeoutCountReg <= ctsCnt;
+            if (state != DCF_RECV_CTSACK) clearResponseWait.send;
             dcfStateReg <= state;
             nextTaskReg <= nextTask;
         endrule
@@ -808,72 +840,76 @@ module mkMacDCF#(Integer id)(MacCore);
         macRegReqQ.deq;
         RegAccessResp resp = RegAccessResp{readData: 0, error: False};
 
+        // C01: 先构造写后的完整快照，再原子传播；不能下发非阻塞赋值前的旧 cfg。
+        MacConfig nextCfg = macCfgReg;
+        Bool configWrite = False;
+        Bool valueFits = True;
         // 寄存器访问逻辑
         case (req.regOffset)
             // MAC 配置寄存器 (可修改)
             mac_slot_time_off: begin
-                if (req.writeEnable) macCfgReg.slot <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.slot = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.slot);
             end
             mac_sifs_off: begin
-                if (req.writeEnable) macCfgReg.sifs <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.sifs = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.sifs);
             end
             mac_difs_off: begin
-                if (req.writeEnable) macCfgReg.difs <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.difs = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.difs);
             end
             mac_eifs_off: begin
-                if (req.writeEnable) macCfgReg.eifs <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.eifs = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.eifs);
             end
             mac_sig_time_off: begin
-                if (req.writeEnable) macCfgReg.sigTime <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.sigTime = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.sigTime);
             end
             mac_ofdm_symbol_off: begin
-                if (req.writeEnable) macCfgReg.ofdmSymbolTime <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.ofdmSymbolTime = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.ofdmSymbolTime);
             end
             mac_max_num_off: begin
-                if (req.writeEnable) macCfgReg.maxNum <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.maxNum = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.maxNum);
             end
             mac_phy_delay_off: begin
-                if (req.writeEnable) macCfgReg.phyDelayTime <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.phyDelayTime = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.phyDelayTime);
             end
             mac_timeout_off: begin
-                if (req.writeEnable) macCfgReg.timeout <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.timeout = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.timeout);
             end
             mac_cw_min_off: begin
-                if (req.writeEnable) macCfgReg.cwMin <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.cwMin = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 10; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.cwMin);
             end
             mac_cw_max_off: begin
-                if (req.writeEnable) macCfgReg.cwMax <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.cwMax = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 10; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.cwMax);
             end
             mac_rts_thresh_off: begin
-                if (req.writeEnable) macCfgReg.rtsThreshold <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.rtsThreshold = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 65535; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.rtsThreshold);
             end
             mac_retry_limit_off: begin
-                if (req.writeEnable) macCfgReg.retryLimit <= truncate(req.writeData);
+                if (req.writeEnable) begin nextCfg.retryLimit = truncate(req.writeData); configWrite = True; valueFits = req.writeData <= 15; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(macCfgReg.retryLimit);
             end
             nav_en_h_off: begin
-                if (req.writeEnable) macCfgReg.navEn <= unpack(truncate(req.writeData[0]));
+                if (req.writeEnable) begin nextCfg.navEn = unpack(truncate(req.writeData[0])); configWrite = True; valueFits = req.writeData <= 1; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.navEn));
                 $display("wawawa update nav, myid is %d", id);
             end
             txop_en_h_off: begin
-                if (req.writeEnable) macCfgReg.txopEn <= unpack(truncate(req.writeData[0]));
+                if (req.writeEnable) begin nextCfg.txopEn = unpack(truncate(req.writeData[0])); configWrite = True; valueFits = req.writeData <= 1; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.txopEn));
             end
             filter_en_h_off: begin
-                if (req.writeEnable) macCfgReg.filterEn <= unpack(truncate(req.writeData[0]));
+                if (req.writeEnable) begin nextCfg.filterEn = unpack(truncate(req.writeData[0])); configWrite = True; valueFits = req.writeData <= 1; end
                 resp.readData = req.writeEnable ? zeroExtend(req.writeData) : zeroExtend(pack(macCfgReg.filterEn));
             end
             
@@ -897,6 +933,22 @@ module mkMacDCF#(Integer id)(MacCore);
             end
         endcase
         
+        if (configWrite) begin
+            Bool validCfg = valueFits && nextCfg.slot != 0 && nextCfg.cwMin <= nextCfg.cwMax
+                            && nextCfg.cwMax <= 10;
+            Bool idleForConfig = dcfStateReg == DCF_IDLE && pendingTxCountReg == 0
+                && !highMacTxReqQ.notEmpty && !innerhighMacTxReqQ.notEmpty
+                && backOffFsm.available && phyStatusWire.state == PHY_IDLE;
+            if (!validCfg || (nextCfg != macCfgReg && !idleForConfig)) begin
+                // 忙时拒绝改变活动事务的参数；同值写仍可用于诊断，原读接口不变。
+                resp.error = True;
+                resp.readData = 0;
+            end
+            else if (nextCfg != macCfgReg) begin
+                macCfgReg <= nextCfg;
+                backOffFsm.putmaccfg.put(nextCfg);
+            end
+        end
         macRegRespQ.enq(resp);
     endrule
 

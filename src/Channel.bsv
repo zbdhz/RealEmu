@@ -180,15 +180,20 @@ module mkGainLossModelLogDistance(GainLossModel_Ctrl);
     rule updateChannelConfig;
         let chancfg = chancfgTxReqQ.first;
         chancfgTxReqQ.deq;
-        chancfgTxRespQ.enq(GenericResp{});
         let bramReq = BRAMRequest {
                 write: True,
-                responseOnWrite: False,
+                responseOnWrite: True,
                 address: truncate(pack(chancfg.srcPhyId)),
                 datain: truncate(pack(chancfg.distance))
             };
         distanceRam2.portA.request.put(bramReq);
         $display("channel config: srcPhyId=%d, dstPhyId=%d, distance=%d", chancfg.srcPhyId, chancfg.dstPhyId, chancfg.distance);
+    endrule
+
+    // C02: BRAM 返回写响应之后才确认配置完成，供桥接顺序屏障使用。
+    rule confirmChannelConfig;
+        let ignored <- distanceRam2.portA.response.get;
+        chancfgTxRespQ.enq(GenericResp{});
     endrule
 
     rule handshakeRx;

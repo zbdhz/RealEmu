@@ -35,7 +35,7 @@ module mkTestPhy(Empty);
     //     let resp <- dut0.phyRxSrv.response.get;
     // endrule
 
-    rule send if (cycleCount % (fromInteger(valueOf(Send_delta_time_us))*200) == 0);
+    rule send if (cycleCount % (fromInteger(valueOf(Send_delta_time_us))*fromInteger(valueOf(US_CYCLES))) == 0);
         let cnt = cntCount;
         cntCount <= cntCount + 1;
         let txReq = getEmptyMacEvent;

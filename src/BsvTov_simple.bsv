@@ -77,6 +77,20 @@ module mkEmuCore(EmuCore);
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_cfg <- mkFIFOF; // 接收数据缓冲
     FIFOF#(AxiStream#(KEEP_WIDTH, TUSER_WIDTH)) axi2BridgeFifo_per <- mkFIFOF; // 接收数据缓冲
 
+    // C02: 数据跟在配置之后时形成顺序屏障；DMA 写完成仍仅表示入口接收。
+    // 配置在路由时记账，在目标 BRAM 完成的响应回来后销账，禁止后续 DATA 越过。
+    Reg#(UInt#(8)) cfgPending <- mkReg(0);
+    PulseWire cfgQueued <- mkPulseWire;
+    PulseWire chanCfgDone <- mkPulseWire;
+    PulseWire perCfgDone <- mkPulseWire;
+    rule countConfigPending;
+        UInt#(8) nextCount = cfgPending;
+        if (cfgQueued) nextCount = nextCount + 1;
+        if (chanCfgDone) nextCount = nextCount - 1;
+        if (perCfgDone) nextCount = nextCount - 1;
+        cfgPending <= nextCount;
+    endrule
+
     Vector#(NODE_NUM, MacCore) macNodes <- genWithM(compose(mkMacDCF, fromInteger));
     Vector#(NODE_NUM, PhyCore) phyNodes <- genWithM(compose(mkPhyYansWifi, fromInteger));
     Vector#(NODE_NUM, GainLossModel_Ctrl) channels <- replicateM(mkGainLossModelLogDistance);
@@ -127,10 +141,21 @@ module mkEmuCore(EmuCore);
     //从AXI接收数据并转发到 Bridge
     rule forward_axi_to_bridge; 
         let axiPkt = axi2BridgeFifo.first;
-        axi2BridgeFifo.deq;
-        if(axi2BridgeFifo_mac.notFull) axi2BridgeFifo_mac.enq(axiPkt);
-        if(axi2BridgeFifo_cfg.notFull) axi2BridgeFifo_cfg.enq(axiPkt);
-        if(axi2BridgeFifo_per.notFull) axi2BridgeFifo_per.enq(axiPkt);
+        MacBridge_TOP routed = unpack(truncate(axiPkt.tData));
+        // 只投递真实目标；目标满时整个规则自然反压，不能先 deq 再有条件丢投。
+        if (routed.bridgeTag.control == 0) begin
+            if (cfgPending == 0) begin
+                axi2BridgeFifo_mac.enq(axiPkt);
+                axi2BridgeFifo.deq;
+            end
+        end
+        else if (routed.bridgeTag.notUsed == 0 || routed.bridgeTag.notUsed == 1) begin
+            if (routed.bridgeTag.notUsed == 0) axi2BridgeFifo_cfg.enq(axiPkt);
+            else axi2BridgeFifo_per.enq(axiPkt);
+            cfgQueued.send;
+            axi2BridgeFifo.deq;
+        end
+        else axi2BridgeFifo.deq; // 未定义的 tag 不参加配置完成计数。
     endrule
 
     rule forward_axi_to_macbridge; 
@@ -150,10 +175,8 @@ module mkEmuCore(EmuCore);
         axi2BridgeFifo_cfg.deq;
         CfgBridge_TOP cfgbridge_top = unpack(truncate(axiPkt.tData));
         if(cfgbridge_top.bridgeTag.control == 1 && cfgbridge_top.bridgeTag.notUsed == 0)begin
-            if(cfgbridge_top.channelCfg.srcPhyId != cfgbridge_top.channelCfg.dstPhyId)begin
                 cfgbridge.chanTxSrv.request.put(cfgbridge_top.channelCfg);
                 // $display("cfgbridge tx ok, srcPhyId:%d, dstPhyId:%d",cfgbridge_top.channelCfg.srcPhyId, cfgbridge_top.channelCfg.dstPhyId);
-            end
         end
     endrule
 
@@ -172,10 +195,12 @@ module mkEmuCore(EmuCore);
 
     rule handshake_cfgbridge;
         let resp_cfgbridge <- cfgbridge.chanTxSrv.response.get;
+        chanCfgDone.send;
     endrule
 
     rule handshake_cfgbridge_per;
         let resp_cfgbridge_per <- cfgbridge.perTxSrv.response.get;
+        perCfgDone.send;
     endrule
 
     interface dmaAxiLiteSlave = axilitenodemanager.axiLiteSlave;

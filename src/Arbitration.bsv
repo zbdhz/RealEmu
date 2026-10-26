@@ -38,17 +38,16 @@ module mkArbiter(ArbiterIFC);
     ///////////////////////////////////////////////////////////////////////////
     // 轮询控制逻辑（保持原始结构）
     ///////////////////////////////////////////////////////////////////////////
-    Reg#(Tuple2#(Bool, PhyEvent)) deMuxReg <- mkDReg(tuple2(False, getEmptyPhyEvent));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
-    // Vector#(GROUP_SIZE, Reg#(Tuple2#(Bool, PhyEvent))) deMuxRegs <- replicateM(mkDReg(tuple2(False, getEmptyPhyEvent)));
+    // C02: 广播事件保留到全部接收队列接受；单节点背压不能吃掉 valid。
+    FIFOF#(PhyEvent) broadcastQ <- mkFIFOF;
 
     ///////////////////////////////////////////////////////////////////////////
     // 32叉树聚合逻辑
     ///////////////////////////////////////////////////////////////////////////
     Reg#(MuxState) muxState <- mkReg(MuxBegin);
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(PhyId))    phyIdRegs  <- replicateM(mkDReg(0));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs1 <- replicateM(mkDReg(False));
-    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(PhyEvent)) eventRegs1 <- replicateM(mkDReg(getEmptyPhyEvent));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(PhyId))    phyIdRegs  <- replicateM(mkReg(0));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(Bool))     validRegs1 <- replicateM(mkReg(False));
+    Vector#(TDiv#(NODE_NUM, GROUP_SIZE), Reg#(PhyEvent)) eventRegs1 <- replicateM(mkReg(getEmptyPhyEvent));
 
     // Level 1 MUX（32节点→1节点）
     rule muxBegin if (muxState == MuxBegin);
@@ -95,7 +94,7 @@ module mkArbiter(ArbiterIFC);
             end
         end
 
-        deMuxReg <= tuple2(finalValid, finalEvent);
+        if (finalValid) broadcastQ.enq(finalEvent);
         muxState <= MuxBegin;
         if(finalValid && txReqQs[selectId].notEmpty)begin
             txReqQs[selectId].deq;
@@ -107,27 +106,12 @@ module mkArbiter(ArbiterIFC);
     // 32叉树广播流水线
     ///////////////////////////////////////////////////////////////////////////
 
-    rule propagateDeMux;
-        let {valid, txEvent} = deMuxReg;
-        // 每个节点广播到32个子节点
-        for (Integer sg = 0; sg < valueOf(GROUP_SIZE); sg = sg + 1) begin
-            deMuxRegs[sg] <= tuple2(valid, txEvent);
-        end
-    endrule
-
-    ///////////////////////////////////////////////////////////////////////////
-    // 最终广播分发
-    ///////////////////////////////////////////////////////////////////////////
     rule finalBroadcast;
-        for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            for (Integer gr = 0; gr < valueOf(GROUP_SIZE); gr = gr + 1) begin
-                let index = g*valueOf(GROUP_SIZE) + gr;
-                let {valid, txEvent} = deMuxRegs[g];
-                if (valid && (txEvent.srcPhyId != fromInteger(index))) begin
-                    rxReqQs[index].enq(txEvent);
-                end
-            end
+        let evt = broadcastQ.first;
+        for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+            if (evt.srcPhyId != fromInteger(i)) rxReqQs[i].enq(evt);
         end
+        broadcastQ.deq;
     endrule
 
     for(Integer i = 0; i < valueOf(NODE_NUM); i = i + 1)begin
