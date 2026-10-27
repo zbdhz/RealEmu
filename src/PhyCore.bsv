@@ -27,6 +27,8 @@ import DReg::*;
 import BUtils ::*;
 import RegFile::*;
 import BRAM::*;
+import Vector::*;
+import RWire::*;
 
 import LFSR::*;
 import Divide::*;
@@ -36,11 +38,12 @@ import Types::*;
 import PrimUtils::*;
 
 
-// T02: 仅给正在计算的时长/查表携带标记，不增加活动干扰表或改动外部事件格式。
+// 内部标签不改变 MAC/信道事件格式；时长和功率始终属于同一个入站事件。
 typedef struct {
     Bool tx;
     Bool strong;
     UInt#(32) started;
+    PhyId source;
 } PhyTimingTag deriving (Bits, Eq, FShow);
 typedef struct {
     PhyTimingTag tag;
@@ -52,7 +55,22 @@ typedef struct {
     UInt#(32) epoch;
     Mcs mcs;
     PowerDb power;
+    UInt#(32) noise;
 } PhyLookupTag deriving (Bits, FShow);
+
+// 每个无线源同时只有一帧在空口。保留最近一帧的区间，过期由时间比较判定，
+// 不因接收机 IDLE/TX 或没有锁定该帧而漏掉其后续干扰。
+typedef struct {
+    Bool valid;
+    PhyId source;
+    UInt#(32) started;
+    UInt#(32) ended;
+    UInt#(32) power;
+} PhyEnergy deriving (Bits, FShow);
+
+function Bool energyActiveAt(PhyEnergy e, UInt#(32) at);
+    return e.valid && (at - e.started < e.ended - e.started);
+endfunction
 
 function UInt#(18) phyNdbps(Mcs mcs);
     case (mcs)
@@ -83,6 +101,7 @@ endinterface
 ///============================================================================
 // (* synthesize *)
 module mkPhyYansWifi#(Integer id)(PhyCore);
+    UInt#(32) noisePower = 256; // 归一化线性噪声功率，对应内部0dB。
     FIFOF#(MacEvent)    lowMacTxReqQ      <- mkFIFOF;
     FIFOF#(GenericResp) lowMacTxRespQ     <- mkFIFOF;
     FIFOF#(MacEvent)    lowMacRxReqQ      <- mkFIFOF;
@@ -100,6 +119,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     FIFOF#(PhyTimingReq) rxTimingQ <- mkFIFOF;
     Reg#(UInt#(32)) rxArrivalReg <- mkReg(0);
     Reg#(UInt#(32)) currentRxEpoch <- mkReg(0);
+    Reg#(UInt#(32)) currentRxEnd <- mkReg(0);
     Reg#(UInt#(32)) currentTxEpoch <- mkReg(0);
     FIFOF#(PhyLookupTag) lookupReqQ <- mkFIFOF;
     FIFOF#(PhyLookupTag) searchTags <- mkFIFOF;
@@ -111,6 +131,45 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     Reg#(Bool) dataPerReady <- mkReg(False);
     Reg#(UInt#(16)) syncPerValue <- mkReg(0);
     Reg#(UInt#(16)) dataPerValue <- mkReg(0);
+    Reg#(UInt#(32)) dataPerNoise <- mkReg(0);
+    FIFOF#(UInt#(32)) linearPowerQ <- mkSizedFIFOF(32);
+    FIFOF#(PhyEnergy) energyUpdates <- mkFIFOF;
+    Vector#(NODE_NUM, Reg#(PhyEnergy)) energies <- replicateM(mkReg(
+        PhyEnergy{valid: False, source: 0, started: 0, ended: 0, power: 0}));
+    Reg#(UInt#(36)) packetMaxInterference <- mkReg(0);
+    Wire#(UInt#(32)) packetNoise <- mkDWire(noisePower);
+    // 起始通知落一拍，避免 RX 状态机、CCA 和时长发布之间形成组合调度环。
+    Reg#(Maybe#(Tuple2#(UInt#(32), PhyId))) startReception <- mkDReg(tagged Invalid);
+    Reg#(Bool) retireEnergyPending <- mkReg(False);
+    rule requestEnergyRetirement(!retireEnergyPending && truncate(pack(phyCycle)) == 16'h0000);
+        retireEnergyPending <= True;
+    endrule
+    // 保留结束后65536周期的历史，足够覆盖有界元数据流水的迟到查询；随后清掉
+    // valid，防止32位周期计数绕回时，长时间沉默节点的旧信号重新被当成干扰。
+    // 请求保持到空闲拍执行，不能因恰逢新事件而漏掉整次回收。
+    rule retireEnergy(retireEnergyPending && !isValid(startReception) && !energyUpdates.notEmpty);
+        for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+            let e = energies[i];
+            UInt#(32) age = phyCycle - e.ended;
+            if (e.valid && age > 65536 && age < 'h80000000) begin
+                e.valid = False;
+                energies[i] <= e;
+            end
+        end
+        retireEnergyPending <= False;
+    endrule
+    PulseWire energyQueued <- mkPulseWire;
+    PulseWire energyProcessed <- mkPulseWire;
+    Reg#(UInt#(8)) energyPending <- mkReg(0);
+    rule countEnergyPending;
+        if (energyQueued && !energyProcessed) energyPending <= energyPending + 1;
+        else if (!energyQueued && energyProcessed) energyPending <= energyPending - 1;
+    endrule
+    rule boundPacketNoise;
+        UInt#(36) total = packetMaxInterference + zeroExtend(noisePower);
+        // 原对数查找器输入32位；先宽位求和，再饱和，禁止多节点功率相加回绕。
+        packetNoise <= total > 'hffffffff ? 'hffffffff : truncate(total);
+    endrule
     FIFOF#(GenericResp) phyRxRespQ        <- mkFIFOF;
 
     // FIFOF#(PhyStatusReq) phyStatusReqQ     <- mkFIFOF;
@@ -128,13 +187,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     UInt#(32) clkFreq = fromInteger(valueOf(US_CYCLES));
 
     UInt#(32)  syncTime     = 20 * clkFreq;  
-    UInt#(32)  noisePower   = 256; //1mW   
     Int#(12)   lowSNR       = -160;   
     Int#(12)   highSNR      = 960;
     Int#(12)   threash      =-960;   // threash = -30dBm  
     // 碰撞模型对齐 ns-3: CS(Clear Sense)能量门限, 4dBm。
     // 落在隐藏对收功率 74(d=1023,2.3dBm) 与最远正常对 186(d=682,5.8dBm) 之间,
-    // 用于: ①CCA 忙判定门控 ②SYNC 进入门限 ③碰撞干扰有效性判据
+    // 只用于CCA和SYNC准入；低于此门限的帧仍参与干扰功率统计。
     Int#(12)   csThreash    = 128;
     //---------------------------
     //reg wire 
@@ -159,13 +217,14 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     
     Reg#(PhyFsmState)stateReg           <- mkReg(PHY_IDLE); 
     Wire#(Bool)      ccaBusyReg         <- mkDWire(False); 
-    // 碰撞标记: 正在收帧时又来一个过 CS 门限的新帧 -> 当前帧判废 (对齐 ns-3 无 capture 双败)
+    // 强帧重叠诊断标记；成功与否由整包峰值SINR的PRR决定。
     Reg#(Bool)       collideReg         <- mkReg(False);
     Reg#(Bool)       syncCrcReg         <- mkDReg(False);
     Reg#(Bool)       syncEndReg         <- mkDReg(False);
     Reg#(Bool)       crcReg             <- mkDReg(False);
 
     Reg#(Bit#(16))   randomValueReg     <- mkReg(0);
+    Reg#(Bit#(16))   packetRandomReg    <- mkReg(0);
 
     Reg#(Bit#(DEV_ID_WIDTH))   currentSrcipReg   <- mkReg(0);
     Reg#(Bit#(DEV_ID_WIDTH))   currentDstipReg   <- mkReg(0);
@@ -186,6 +245,16 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     Reg#(UInt#(32))     syncTimerReg        <- mkReg(0);     
     Reg#(UInt#(32))     txTimerReg          <- mkReg(clkFreq * 20);   
     Reg#(UInt#(32))     ccaTimerReg         <- mkReg(0);  
+    Reg#(UInt#(32)) lastTxEnded <- mkReg(0);
+    Reg#(UInt#(32)) postTxWindow <- mkReg(0);
+    PulseWire finishedLocalTx <- mkPulseWire;
+    rule rememberLocalTxEnd;
+        if (finishedLocalTx) begin
+            lastTxEnded <= phyCycle;
+            postTxWindow <= syncTime;
+        end
+        else if (postTxWindow > 0) postTxWindow <= postTxWindow - 1;
+    endrule
 
     //---------------------
     //FIFOF
@@ -202,7 +271,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         if (phyRxReqQ.notEmpty) begin
             let {arrived, phyRxpkt} = phyRxReqQ.first;
             rxTimingQ.enq(PhyTimingReq{
-                tag: PhyTimingTag{tx: False, strong: phyRxpkt.rfParam.power > csThreash, started: arrived},
+                tag: PhyTimingTag{tx: False, strong: phyRxpkt.rfParam.power > csThreash, started: arrived,
+                    source: phyRxpkt.srcPhyId},
                 length: unpack(phyRxpkt.ppduLen), mcs: phyRxpkt.rfParam.mcs});
             rxArrivalReg <= arrived;
             phyRxReqQ.deq;
@@ -276,6 +346,12 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         if (!tag.tx && tag.started == currentRxEpoch) begin
             rxTimeValid <= True;
             rxRemaining <= remaining;
+            currentRxEnd <= tag.started + total;
+        end
+        if (!tag.tx) begin
+            energyUpdates.enq(PhyEnergy{valid: True, source: tag.source,
+                started: tag.started, ended: tag.started + total, power: linearPowerQ.first});
+            linearPowerQ.deq;
         end
         if (tag.tx || tag.strong) begin
             energyTimeValid <= True;
@@ -284,15 +360,58 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     endrule
 
     //---------------------------
-    // 碰撞检测(并入 handlePhyState 的 SYNC/RX 分支):
-    // 接收中又来一个过 CS 门限的新帧 -> collideReg 置位, 当前帧判废。
-    // 新帧自身不重同步(状态机忙被丢弃) => 两帧全败, 对齐 ns-3 无 capture 碰撞语义。
-    // 发送方走既有 timeout 重传路径, MacCore 零改动。
+    // 接收中不捕获切换到新帧；新帧仍保存在能量区间表中。
+    // 当前帧按最坏SINR判决，后到帧即使没有被锁定，其尾部仍会影响后续接收。
     //---------------------------
 
     //---------------------------
     // stateReg
     //---------------------------
+    function Action commitPhyTx(MacEvent lowMactxReq);
+        return action
+            PhyEvent phyTxpkt = PhyEvent{
+                srcPhyId: lowMactxReq.srcMacId,
+                dstPhyId: lowMactxReq.dstMacId,
+                rfParam: lowMactxReq.rfParam,
+                ppduLen: unpack(pack(lowMactxReq.mpduDigest.length)),
+                        mpduDigest: lowMactxReq.mpduDigest,
+                        airTimeValid: True, airStarted: phyCycle
+            };
+            lowMacTxReqQ.deq;
+            lowMacTxRespQ.enq(GenericResp{});
+            phyTxReqQ.enq(phyTxpkt);
+            txTimingQ.enq(PhyTimingReq{
+                tag: PhyTimingTag{tx: True, strong: True, started: phyCycle, source: fromInteger(id)},
+                length: unpack(phyTxpkt.ppduLen), mcs: phyTxpkt.rfParam.mcs});
+            currentTxEpoch <= phyCycle;
+            txBeginReg      <= True;
+            stateReg        <= PHY_TX;
+            txTimerReg      <= syncTime;
+            currentMcsReg   <= phyTxpkt.rfParam.mcs;
+            currentPowerReg <= phyTxpkt.rfParam.power;
+            currentLenReg   <= unpack(pack(phyTxpkt.ppduLen));
+            // $display("PHY_TX start");
+            $display("[%8d ns] id: %0d, PHY_TX start", $time, id);
+            // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
+        endaction;
+    endfunction
+
+    // SIFS应答在MAC已提交后具有优先级，可以中止SIFS期间新开始的接收；
+    // 普通RTS/DATA仍走IDLE准入，忙时保留请求，保持D01的原子接受保证。
+    (* descending_urgency = "acceptImmediateResponse, handlePhyState" *)
+    rule acceptImmediateResponse(stateReg != PHY_TX
+        // RX已经结束、只因输出背压尚未交付时，先保留并交付成功事件，不能抢占丢包。
+        && (stateReg == PHY_IDLE || rxBeginReg || rxTimerReg > 0)
+        && lowMacTxReqQ.first.mpduDigest.frameType == fromInteger(valueOf(FC_TYPE_CONTROL))
+        && (lowMacTxReqQ.first.mpduDigest.frameSubType == fromInteger(valueOf(FC_CTRLSUB_ACK))
+            || lowMacTxReqQ.first.mpduDigest.frameSubType == fromInteger(valueOf(FC_CTRLSUB_CTS))));
+        commitPhyTx(lowMacTxReqQ.first);
+        rxBeginReg <= False;
+        rxTimerReg <= 0;
+        rxEndReg <= False;
+        collideReg <= False;
+    endrule
+
     rule handlePhyState;
         // RX timer 代表整帧剩余周期，跨 SYNC/RX 连续扣减，不因查表/状态切换重装时长。
         if (stateReg == PHY_SYNC || stateReg == PHY_RX) begin
@@ -308,37 +427,19 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 // D01: 忙时请求留在原 FIFO；接受、信道发布和进入 TX 必须同拍完成。
                 // 已到达的强 RX 优先；隐藏弱帧不能仅凭 valid 就阻止本机发送。
                 if (lowMacTxReqQ.notEmpty && !(rxValidReg && (rxPowerReg > csThreash))) begin
-                    let lowMactxReq = lowMacTxReqQ.first;
-                    PhyEvent phyTxpkt = PhyEvent{
-                        srcPhyId: lowMactxReq.srcMacId,
-                        dstPhyId: lowMactxReq.dstMacId,
-                        rfParam: lowMactxReq.rfParam,
-                        ppduLen: unpack(pack(lowMactxReq.mpduDigest.length)),
-                        mpduDigest: lowMactxReq.mpduDigest
-                    };
-                    lowMacTxReqQ.deq;
-                    lowMacTxRespQ.enq(GenericResp{});
-                    phyTxReqQ.enq(phyTxpkt);
-                    txTimingQ.enq(PhyTimingReq{
-                        tag: PhyTimingTag{tx: True, strong: True, started: phyCycle},
-                        length: unpack(phyTxpkt.ppduLen), mcs: phyTxpkt.rfParam.mcs});
-                    currentTxEpoch <= phyCycle;
-                    txBeginReg      <= True;
-                    stateReg        <= PHY_TX;
-                    txTimerReg      <= syncTime;
-                    currentMcsReg   <= phyTxpkt.rfParam.mcs;
-                    currentPowerReg <= phyTxpkt.rfParam.power;
-                    currentLenReg   <= unpack(pack(phyTxpkt.ppduLen));
-                    // $display("PHY_TX start");
-                    $display("[%8d ns] id: %0d, PHY_TX start", $time, id);
-                    // immLog("mkPhyYansWifi", "handlePhyState", $format("Id %5d, Phy Tx Start", id));
+                    commitPhyTx(lowMacTxReqQ.first);
                 end
-                else if (rxValidReg && (rxPowerReg > csThreash) && phyCycle - rxArrivalReg < syncTime) begin
+                else if (rxValidReg && (rxPowerReg > csThreash) && phyCycle - rxArrivalReg < syncTime
+                    // 元数据可能在本机TX结束后才到；在TX期间开始的前导不能事后补收。
+                    && !(postTxWindow > 0 && rxArrivalReg - lastTxEnded >= 'h80000000)) begin
                     // 进入同步状态 (CS 门限: 弱于门限的帧不占用接收机, 对齐隐藏节点语义)
                     rxBeginReg      <= True;
                     stateReg        <= PHY_SYNC;
                     syncTimerReg    <= syncTime - (phyCycle - rxArrivalReg) - 1;
                     currentRxEpoch <= rxArrivalReg;
+                    // 每次空口接收只抽一次；输出FIFO背压不能反复抽签改变CRC结果。
+                    packetRandomReg <= randomValueReg;
+                    startReception <= tagged Valid tuple2(rxArrivalReg, rxSrcipReg);
                     rxTimerReg <= 0;
                     syncLookupSent <= False;
                     dataLookupSent <= False;
@@ -358,7 +459,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             end
     
             PHY_SYNC: begin
-                // 碰撞: 同步中被新强帧重叠 -> 判废
+                // 仅记录同步期间的强信号重叠，不覆盖最终概率判决。
                 if (rxValidReg && (rxPowerReg > csThreash)) begin
                     collideReg <= True;
                     $display("[%8d ns] id: %0d, COLLISION in SYNC (power:%d)",
@@ -372,7 +473,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 // T02: 查表请求只发一次，并携带阶段/帧标记。128周期覆盖搜索和BRAM延迟。
                 if (!syncLookupSent && syncTimerReg <= 128) begin
                     lookupReqQ.enq(PhyLookupTag{payload: False, epoch: currentRxEpoch,
-                        mcs: currentMcsReg, power: currentPowerReg});
+                        mcs: currentMcsReg, power: currentPowerReg, noise: packetNoise});
                     syncLookupSent <= True;
                 end
                 if (perResults.notEmpty) begin
@@ -385,7 +486,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 end
                 if (syncTimerReg == 0 && syncPerReady) begin
                     syncEndReg <= True;
-                    syncCrcReg <= syncPerValue >= unpack(randomValueReg);
+                    syncCrcReg <= syncPerValue >= unpack(packetRandomReg);
                     stateReg <= PHY_RX;
                 end
             end
@@ -393,21 +494,30 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
             PHY_RX: begin
                 if (rxValidReg && rxPowerReg > csThreash && rxTimerReg > 0)
                     collideReg <= True;
-                if (!dataLookupSent && !rxBeginReg && rxTimerReg <= 128) begin
+                if (!dataLookupSent && !rxBeginReg && rxTimerReg <= 128 && energyPending == 0) begin
                     lookupReqQ.enq(PhyLookupTag{payload: True, epoch: currentRxEpoch,
-                        mcs: currentMcsReg, power: currentPowerReg});
+                        mcs: currentMcsReg, power: currentPowerReg, noise: packetNoise});
                     dataLookupSent <= True;
                 end
+                else if (dataPerReady && dataPerNoise != packetNoise)
+                    dataLookupSent <= False;
                 if (perResults.notEmpty) begin
                     let {tag, value} = perResults.first;
                     perResults.deq;
                     if (tag.epoch == currentRxEpoch && tag.payload) begin
                         dataPerValue <= value;
+                        dataPerNoise <= tag.noise;
                         dataPerReady <= True;
                     end
                 end
-                if (!rxBeginReg && rxTimerReg == 0 && dataPerReady) begin
-                    Bool correct = dataPerValue >= unpack(randomValueReg) && !collideReg && currentMcsReg < 8;
+                else if (dataPerReady && dataPerNoise != packetNoise)
+                    dataPerReady <= False;
+                // 提前查表可以隐藏延迟；末尾又有新干扰时必须重新查表，不能使用旧 SINR。
+                if (!rxBeginReg && rxTimerReg == 0 && dataPerReady && dataPerNoise == packetNoise
+                    && energyPending == 0) begin
+                    // mode0: 整个 PPDU 的最坏总干扰只做一次整包 PRR 判决。
+                    // collideReg 仅供重叠诊断，不能再绕过概率表把所有强帧重叠一律判废。
+                    Bool correct = dataPerValue != 0 && dataPerValue >= unpack(packetRandomReg) && currentMcsReg < 8;
                     // C02: 成功数据直接进入原输出 FIFO；满时保留该完成决定，不丢 CRC 脉冲。
                     if (correct) lowMacRxReqQ.enq(MacEvent{
                         srcMacId: currentSrcipReg, dstMacId: currentDstipReg,
@@ -439,6 +549,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
                 else begin
                     stateReg <= PHY_IDLE;
                     txEndReg <= True;
+                    finishedLocalTx.send;
                     $display("[%8d ns] PHY_TX END", $time);
                     // if(id==0 || id == 1)
                     //     $display("%d PHY_TX END", id);
@@ -486,7 +597,7 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     );
 
     //功率值查表映射（Q6.5定点数）
-    rule putAddr1 if ((stateReg == PHY_SYNC || stateReg == PHY_RX) && rxValidReg);
+    rule putAddr1 if (rxValidReg);
         UInt#(12) addr1 = unpack(pack(rxPowerReg + 2047 + 1));
         rom1.request.put(addr1);
         // $display("addr1: %0d", addr1);
@@ -523,13 +634,8 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
         perTags.deq;
     endrule
 
-    Reg#(UInt#(32)) currentmaxReg <- mkReg(0);
-    Reg#(UInt#(32)) currentReg <- mkDReg(0);
-    Reg#(UInt#(32)) noiseSumReg <- mkReg(noisePower);
-    Reg#(UInt#(32)) cycleCount <- mkReg(0);
-    UInt#(32) sinrSmaple = 5 * clkFreq;
     rule feed_test;
-        searcher.put(noiseSumReg);
+        searcher.put(lookupReqQ.first.noise);
         searchTags.enq(lookupReqQ.first);
         lookupReqQ.deq;
     endrule
@@ -539,36 +645,43 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     //--------------------------
     rule rom1Get;
         let data <- rom1.response.get;
-        currentReg <= data;
-        //$display("max : %0d",data);
-        // immLog("mkPhyYansWifi", "rom1Get", $format("Id %5d, max : %0d", id, data));
+        linearPowerQ.enq(data);
     endrule
 
-    rule updateMaxpower((stateReg == PHY_SYNC) || (stateReg == PHY_RX)) ;
-        if(rxEndReg || syncEndReg) 
-            currentmaxReg <= 0;
-        else if(cycleCount == sinrSmaple - 1)
-            currentmaxReg <= 0;
-        else if (currentReg > currentmaxReg) begin
-            currentmaxReg <= currentReg;
-            // $display("max : %0d\n",currentReg);
-        end 
-    endrule
-
-    rule handleCycleEnd((stateReg == PHY_SYNC) || (stateReg == PHY_RX));
-        if(rxEndReg || syncEndReg) begin
-            noiseSumReg <=  noisePower;
-        end 
-        else if(cycleCount == sinrSmaple - 1) begin
-            noiseSumReg <= noiseSumReg + currentmaxReg;
+    // 总干扰只会在新信号开始时增加；结束只会减少。因此检查各开始事件以及
+    // 目标包开始点就能精确得到“并发功率和的最大值”，无需逐周期积分/分段 BER。
+    // 在原到达时刻查询区间，补偿 ROM/除法流水；末尾一拍才来的干扰也不会漏掉。
+    rule trackPacketInterference(isValid(startReception) || energyUpdates.notEmpty);
+        if (startReception matches tagged Valid {.started, .source}) begin
+            UInt#(36) initialPower = 0;
+            for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+                let e = energies[i];
+                if (energyActiveAt(e, started) && !(e.source == source && e.started == started))
+                    initialPower = initialPower + zeroExtend(e.power);
+            end
+            packetMaxInterference <= initialPower;
         end
-    endrule
-
-    rule incrementCounter((stateReg == PHY_SYNC) || (stateReg == PHY_RX));
-        if(cycleCount == sinrSmaple - 1)
-              cycleCount <= 0;
-        else
-              cycleCount <= cycleCount + 1;
+        else if (energyUpdates.notEmpty) begin
+            let incomingEnergy = energyUpdates.first;
+            energyUpdates.deq;
+            energyProcessed.send;
+            if (incomingEnergy.source < fromInteger(valueOf(NODE_NUM))) begin
+                energies[incomingEnergy.source] <= incomingEnergy;
+                UInt#(32) sample = (incomingEnergy.started - currentRxEpoch < 'h80000000)
+                                      ? incomingEnergy.started : currentRxEpoch;
+                UInt#(36) aggregate = 0;
+                for (Integer i = 0; i < valueOf(NODE_NUM); i = i + 1) begin
+                    let e = incomingEnergy.source == fromInteger(i) ? incomingEnergy : energies[i];
+                    if (energyActiveAt(e, sample)
+                        && !(e.source == currentSrcipReg && e.started == currentRxEpoch))
+                        aggregate = aggregate + zeroExtend(e.power);
+                end
+                if ((stateReg == PHY_SYNC || stateReg == PHY_RX)
+                    && (rxBeginReg || sample - currentRxEpoch < currentRxEnd - currentRxEpoch)
+                    && aggregate > packetMaxInterference)
+                    packetMaxInterference <= aggregate;
+            end
+        end
     endrule
 
     // rule handlephyStatusReq;
@@ -655,7 +768,11 @@ module mkPhyYansWifi#(Integer id)(PhyCore);
     interface Server phyRxSrv;
         interface Put request;
             method Action put(PhyEvent evt);
-                phyRxReqQ.enq(tuple2(phyCycle, evt));
+                // 仲裁/广播背压只能推迟元数据，不能把空口开始时间也推迟，
+                // 否则原本首尾相接的两帧会被伪造成一两个周期的重叠。
+                UInt#(32) arrived = evt.airTimeValid ? evt.airStarted : phyCycle;
+                phyRxReqQ.enq(tuple2(arrived, evt));
+                energyQueued.send;
             endmethod
         endinterface
         interface response = toGet(phyRxRespQ);

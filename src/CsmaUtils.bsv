@@ -22,15 +22,19 @@ import LFSR::*;
 import DReg::*;
 
 import Types::*;
+`ifndef REALEMU_BACKOFF_SEED
+`define REALEMU_BACKOFF_SEED 12345
+`endif
 
 typedef 20 RTS_MPDU_LEN;
 typedef 14 CTS_MPDU_LEN;
 typedef 14 ACK_MPDU_LEN;
 
 typedef 20 CYNC_MPDU_TIME_us;
-typedef 28 RTS_MPDU_TIME_us;
-typedef 20 CTS_MPDU_TIME_us;
-typedef 20 ACK_MPDU_TIME_us;
+// 6 Mbps OFDM，计入SERVICE/tail后，控制帧payload分别占8/6/6个符号。
+typedef 32 RTS_MPDU_TIME_us;
+typedef 24 CTS_MPDU_TIME_us;
+typedef 24 ACK_MPDU_TIME_us;
 
 function Bool isMyFrame(Integer id, MacId dstMacId);
     return (fromInteger(id) == dstMacId);
@@ -106,6 +110,9 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
     Reg#(Bool)       initReg  <- mkReg(False);
     Reg#(MacConfig)  cfgReg   <- mkReg(getDefaultMacCfg);
     Reg#(ContWindowExp) cwExpReg <- mkReg(getDefaultMacCfg.cwMin);
+    // 站级失败计数与单个MPDU的重传次数不同：丢弃队头不等于竞争成功。
+    // retryLimit表示额外重传次数，+1才是ns-3 FrameRetryLimit的尝试次数。
+    Reg#(UInt#(5)) failedCwCount <- mkReg(0);
   
     LFSR#(Bit#(16))  lfsr        <- mkLFSR_16;
     Reg#(Bit#(10))    randSeedReg <- mkReg(fromInteger(id));
@@ -113,7 +120,8 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
 
     rule init if (!initReg);
         initReg <= True;
-        lfsr.seed(12345);  // Magic Number
+        // 各节点使用独立非零种子；仿真可编译指定种子，便于重复统计。
+        lfsr.seed(fromInteger((`REALEMU_BACKOFF_SEED + 1049 * id) % 65535 + 1));
     endrule
 
     rule genSeed if (initReg);
@@ -166,11 +174,22 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
     endrule
 
     method Action incrCW();
-        cwExpReg <= (cwExpReg >= cfgReg.cwMax) ? cfgReg.cwMax : cwExpReg + 1;
+        if (failedCwCount < zeroExtend(unpack(pack(cfgReg.retryLimit))) + 1) begin
+            failedCwCount <= failedCwCount + 1;
+            cwExpReg <= (cwExpReg >= cfgReg.cwMax) ? cfgReg.cwMax : cwExpReg + 1;
+        end
+        else begin
+            failedCwCount <= 0;
+            cwExpReg <= cfgReg.cwMin;
+        end
+        // 下次抽样必须使用本次更新后的窗口。
+        resultQ.clear;
     endmethod
 
     method Action resetCW();
         cwExpReg <= cfgReg.cwMin;
+        failedCwCount <= 0;
+        resultQ.clear;
     endmethod
 
     interface next = toGet(resultQ);
@@ -180,6 +199,7 @@ module mkExpBackoffGenerator#(Integer id)(ExpBackOffGenerator);
             cfgReg <= cfg;
             // C01: 配置生效时重置当前窗口并丢弃旧配置下预取的样本。
             cwExpReg <= cfg.cwMin;
+            failedCwCount <= 0;
             resultQ.clear;
         endmethod
     endinterface

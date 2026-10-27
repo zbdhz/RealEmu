@@ -19,6 +19,17 @@ import Types::*;
 
 typedef enum {MuxBegin, MuxEnd} MuxState deriving (Bits, Eq);
 
+// 先广播更早开始的空口事件，保持干扰时间线的顺序。合法帧远小于半个回绕周期；
+// 同时开始或旧测试未带时间时，保留原来的高编号优先作为稳定的平局规则。
+function Bool airNoLater(PhyEvent candidate, PhyEvent current);
+    Bool choose = True;
+    if (candidate.airTimeValid && current.airTimeValid) begin
+        UInt#(32) delta = candidate.airStarted - current.airStarted;
+        choose = delta == 0 || delta >= 'h80000000;
+    end
+    return choose;
+endfunction
+
 interface ArbiterIFC;
     interface Vector#(NODE_NUM, PhySrv)  phyRxMetaSrv;  // 连接所有节点的phyTxMetaClt
     interface Vector#(NODE_NUM, PhyClt)  phyTxMetaClt;  // 连接所有节点的phyRxMetaSrv
@@ -61,10 +72,12 @@ module mkArbiter(ArbiterIFC);
             for (Integer i = 0; i < valueOf(GROUP_SIZE); i = i + 1) begin
                 let nodeId = g * valueOf(GROUP_SIZE) + i;
                 if (txReqQs[nodeId].notEmpty) begin
-                    groupValid = True;
                     let phyTxReq = txReqQs[nodeId].first;
-                    groupEvent = phyTxReq;  // 取最后一个有效事件
-                    groupId = nodeId;  // 记录组ID
+                    if (!groupValid || airNoLater(phyTxReq, groupEvent)) begin
+                        groupValid = True;
+                        groupEvent = phyTxReq;
+                        groupId = nodeId;
+                    end
                     //$display("%d",nodeId);
                 end
             end
@@ -87,7 +100,7 @@ module mkArbiter(ArbiterIFC);
         PhyEvent finalEvent = getEmptyPhyEvent;
         
         for (Integer g = 0; g < valueOf(TDiv#(NODE_NUM, GROUP_SIZE)); g = g + 1) begin
-            if (validRegs1[g]) begin
+            if (validRegs1[g] && (!finalValid || airNoLater(eventRegs1[g], finalEvent))) begin
                 finalValid = True;
                 finalEvent = eventRegs1[g];  // 取最后一个有效事件
                 selectId = phyIdRegs[g];  // 记录物理ID

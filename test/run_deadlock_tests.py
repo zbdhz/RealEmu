@@ -97,6 +97,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", action="store_true")
+    parser.add_argument("--build-only", action="store_true",
+                        help="freeze/compile/link only; report BUILT, without a simulation PASS")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--case", action="append", choices=CASES)
     parser.add_argument("--bsc", default=shutil.which("bsc") or
@@ -172,12 +174,15 @@ def main():
                   for item in ("-D", key if value is None else f"{key}={value}")]
         # Full-core debug symbol registration makes GCC -O3 model compilation
         # disproportionately expensive; -O0 preserves cycle accuracy for this integration test.
-        link_opt = ["-Xc++", "-O0"] if name == "config-fence" else []
+        link_opt = (["-Xc++", "-O0"] if name == "config-fence" else
+                    ["-Xc++", "-O2"] if name.startswith("hidden16") else [])
         commands = [
-            ("compile", [args.bsc, "-sim", "-u", *flags, *macros, "-g", top, str(directory / filename)]),
+            ("compile", [args.bsc, "+RTS", "-K512M", "-RTS", "-sim", "-u", *flags, *macros, "-g", top, str(directory / filename)]),
             ("link", [args.bsc, "-sim", "-parallel-sim-link", "4", *link_opt, *flags, "-e", top, "-o", str(directory / "simulate")]),
             ("simulate", [str(directory / "simulate")]),
         ]
+        if args.build_only:
+            commands = commands[:2]
         record = {"case": name, "defines": defines, "test_sha256": hashlib.sha256(test_data).hexdigest(),
                   "stages": [], "passed": False}
         try:
@@ -195,6 +200,13 @@ def main():
                     # BSC may exit zero even when a rule can never execute.
                     if "G0021" in compile_log:
                         raise RuntimeError("BSC generated a rule that can never fire (G0021)")
+            if args.build_only:
+                record.update(built=True, passed=None)
+                (directory / "commands.json").write_text(json.dumps(record, indent=2) + "\n")
+                summaries.append(record)
+                (output / "summary.json").write_text(json.dumps(summaries, indent=2) + "\n")
+                print(name, "BUILT (simulation not run)", flush=True)
+                continue
             log = (directory / "simulate.log").read_text()
             record["results"] = re.findall(r"^(?:RESULT|CASE_PASS|TEST_PASS|TEST_FAIL|TXEND_HIGH_CYCLES).*", log, re.M)
             record["warnings"] = re.findall(r"\((G\d+)\)", (directory / "compile.log").read_text())
@@ -254,7 +266,8 @@ def main():
         summaries.append(record)
         (output / "summary.json").write_text(json.dumps(summaries, indent=2) + "\n")
         print(name, "PASS" if record["passed"] else "FAIL " + record.get("error", ""), flush=True)
-    raise SystemExit(0 if all(item["passed"] for item in summaries) else 1)
+    success = all(item.get("built", False) if args.build_only else item["passed"] for item in summaries)
+    raise SystemExit(0 if success else 1)
 
 
 if __name__ == "__main__":

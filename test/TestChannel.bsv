@@ -23,6 +23,7 @@ function PhyEvent getEmptyPhyEvent();
             dstPhyId: 0,
             rfParam: RfParam { power: 2000, mcs: 0 },
             ppduLen: 0,
+            airTimeValid: False, airStarted: 0,
             mpduDigest: MpduDigest {
                 frameType: 0,
                 frameSubType: 0,

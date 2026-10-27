@@ -292,6 +292,9 @@ typedef struct {
     RfParam rfParam;
     PpduLen ppduLen;
     MpduDigest mpduDigest;
+    // 仅内部PHY/信道事件携带空口开始周期；不改变主机使用的MacEvent格式。
+    Bool airTimeValid;
+    UInt#(32) airStarted;
 }PhyEvent deriving(Eq, Bits, Bounded, FShow);
 
 function PhyEvent getEmptyPhyEvent();
@@ -300,7 +303,8 @@ function PhyEvent getEmptyPhyEvent();
         dstPhyId  : 0, 
         rfParam   : getEmptyRfParam, 
         ppduLen   : 0, 
-        mpduDigest: getEmptyMpduDigest};
+        mpduDigest: getEmptyMpduDigest,
+        airTimeValid: False, airStarted: 0};
 endfunction
 
 function PhyStatus getEmptyPhyStatus();

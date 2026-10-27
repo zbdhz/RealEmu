@@ -1,0 +1,177 @@
+{
+  "dataset": "hidden-node-1to15-20261027",
+  "source_directory": "output/hidden-1to15-20261027-comparison",
+  "total_nodes": 16,
+  "senders": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "warm_us": 20000,
+  "measure_us": 100000,
+  "cycles_per_us": 50,
+  "payload_bytes": 1000,
+  "psdu_bytes": 1064,
+  "data_mbps": 54,
+  "control_mbps": 6,
+  "backoff_seeds": [
+    12345,
+    23456,
+    34567
+  ],
+  "real_runs": 90,
+  "ns3_runs": 300,
+  "real_reused": 30,
+  "ns3_reused": 100,
+  "all_real_runs_drained": true,
+  "validation": "CSV matrix,per-run count-to-goodput,summary medians/ranges and comparison errors recomputed from all390rows",
+  "base_head": "e0f302f3beef91aad70dd332ee3b0c28337e9995",
+  "producer_sources_sha256": {
+    "src/Arbitration.bsv": "349da3fc1d920805de20256a4f77251f7aa999d53544c6c0c618a950c4503249",
+    "src/BsvTop.bsv": "5f08ff2f81e62d754354fe7edc7b17a3125737e997d12b05f9523bd7a9224cc6",
+    "src/BsvTov_simple.bsv": "d62966d4ff718d72417cec9f0b07283460d47c70aa5f9d64c196c7aedb138a2c",
+    "src/CfgAxiLite.bsv": "15916e3f6b0ba265c4c276964f75b539e74e15cd613d6d318a3a77c03582a62f",
+    "src/CfgBridge.bsv": "7e3af48315621d288bcfe1f5d876703dced522297c6c112b9b95d12ba54f4e0b",
+    "src/Channel.bsv": "e97d400e0b9d002633ef1d09e6a640f27d740b9f4ed16810a243a822f9d5a47c",
+    "src/CsmaUtils.bsv": "acd16636dd305ad21c424020dc2cbb168101d6bd9a982afe0e55ab8a27564a68",
+    "src/MacBridge.bsv": "64ed66df47b3dabc27b64a90497791c725063c8bb8601334b1bc1fe2af47d1e1",
+    "src/MacCore.bsv": "b2d411ddcde058699a94e9df29f05f7f3c02bf69781cd4292d22b769cea6dc9d",
+    "src/MathUtils.bsv": "2e7330f415b2e248cdf0e74373a1a11ccc9f3605882110606d144bbe53cde756",
+    "src/PhyCore.bsv": "6e8d4d31a1884063bd4ac2bb582ffd223f7007427cc59e843b3dcff3057bc01b",
+    "src/PrimUtils.bsv": "9d022da8b98511454e495dcaafa587968371008e793615f9ae978015cf565294",
+    "src/ROM.bsv": "539cf1cd9d6c9d7e45ac27318554b67e0446337195902e8405046b3a00819405",
+    "src/Types.bsv": "c67932c103412a2b91fdd110e1f41c068f51ce1df8ab04dcd99472dd549a0b6c",
+    "src/XilBdmaPcieAxiStreamTypes.bsv": "6428df82db400088c0d4e3cacd902aa5fa8ebd179dea2c8f3567d951459ce201",
+    "lib/src/Axi4LiteTypes.bsv": "3ef2774f16e4103dac4835605543bfa1ea3129221be7e6a8d7758bf12e807757",
+    "lib/src/Axi4Types.bsv": "3f3aba72b5570f0b72282e0d37070d202584d3c2a13942789ef088412507ad6b",
+    "lib/src/AxiDefines.bsv": "23990a96a2b9ca70a56e28ed80ab00457dadbec85b37c395c8863e28a0a5dd3c",
+    "lib/src/AxiStreamTypes.bsv": "d93411da67260ce10c567b7cdd3460955ad09fda7067c35089e70a0207d1a505",
+    "lib/src/BusConversion.bsv": "49299df458ef04814c47ca187882e933473e7e752cc664cbc79cb555b8918e42",
+    "lib/src/SemiFifo.bsv": "35f3dad83f17e42cc5aa2a4e73ad30019fc62ccf10f886865a9e745476a6e970",
+    "mem/20lgd.mem": "b1a0edf325b40ef086de96a3fc9ef28dd7e0d8fd0e07a0965cb8734bf62b0af6",
+    "mem/Lg.mem": "d5b4baadf8d55c65c72b06c313fa143c89b43fe40bec2d9dd19156ed572062dc",
+    "mem/Per.mem": "dc8d940ea2579b09408ffdc2ac061107ee30a99c1e88dd82dd5108f313e83e3d",
+    "scripts/genRam.py": "a79ae3a894456941ec0c0e30b2c0d72dc892647a8397c59d459d6f6aef6f2ee5"
+  },
+  "ns3_head": "03bb81ad8430af7814c13ee4b03895853d91bbc8",
+  "ns3_reference_sha256": "c086d71bd00d24b43df1905c2e658a21766fc073a6c2ccb7e892b1188768ea2c",
+  "ns3_libraries_sha256": {
+    "libns3-dev-wifi-default.so": "79beda7e38291885c664c22973ae53f39627f46a2d434956eb46606681ff88b0",
+    "libns3-dev-spectrum-default.so": "39b38cd0d00b8d3d374f343fffbe11285cff0b5c3bbac747d77b0969f630ce33",
+    "libns3-dev-propagation-default.so": "83e3e5ce48c225a57075d4676adb509bd502486d4b65751ab5bd7f84e1124d24",
+    "libns3-dev-mobility-default.so": "d0ecf6b5ce83aa1b035463d077053caf9a637071c45f0d382462bd16d30d3e5b",
+    "libns3-dev-network-default.so": "abd07cd5a923f29c8e8943927e8fe16fdafe99b1b77ae861cb856c5fe93a2f7f",
+    "libns3-dev-core-default.so": "872362a52c797e91d18686e1e8ef8c9c52b464c62b65110999955e9ad4dc6b12"
+  },
+  "models": [
+    {
+      "backoff_seed": 12345,
+      "defines": {
+        "REALEMU_US_CYCLES": 50,
+        "REALEMU_BACKOFF_SEED": 12345
+      },
+      "shared_library_sha256": "9427e6ed826add45b126e93e9e02d72d52af40bb7084e8162ee231fdcbef526c",
+      "test_sha256": "000af35b84aa6f3d5ba78b4fcfbd4fd83b2fa5d8fe4d529d66a68828387fb0aa",
+      "scenario_body_sha256": "f9c87f9f197a705360dcd59fc654fe4481f4ef24ba08b83c25cf74b24a5be46d"
+    },
+    {
+      "backoff_seed": 23456,
+      "defines": {
+        "REALEMU_US_CYCLES": 50,
+        "REALEMU_BACKOFF_SEED": 23456
+      },
+      "shared_library_sha256": "992a0c317bf5cd1f5b2bedf2dd0f80739ef0ac790b071df9da3410aa2b9e9c40",
+      "test_sha256": "000af35b84aa6f3d5ba78b4fcfbd4fd83b2fa5d8fe4d529d66a68828387fb0aa",
+      "scenario_body_sha256": "f9c87f9f197a705360dcd59fc654fe4481f4ef24ba08b83c25cf74b24a5be46d"
+    },
+    {
+      "backoff_seed": 34567,
+      "defines": {
+        "REALEMU_US_CYCLES": 50,
+        "REALEMU_BACKOFF_SEED": 34567
+      },
+      "shared_library_sha256": "51cd401d50417e01c6980dd01406ea0c72a5b54b211eaa4e3fcdd88b67766328",
+      "test_sha256": "000af35b84aa6f3d5ba78b4fcfbd4fd83b2fa5d8fe4d529d66a68828387fb0aa",
+      "scenario_body_sha256": "f9c87f9f197a705360dcd59fc654fe4481f4ef24ba08b83c25cf74b24a5be46d"
+    }
+  ],
+  "files": {
+    "realemu-summary.csv": {
+      "rows": 15,
+      "source_sha256": "56490e63807eb1b174ea970c086d11e57736ee91a6abd56d27f0f33d45d2766d",
+      "archive_sha256": "56490e63807eb1b174ea970c086d11e57736ee91a6abd56d27f0f33d45d2766d",
+      "normalization": "byte-identical copy"
+    },
+    "realemu-runs.csv": {
+      "rows": 90,
+      "source_sha256": "1b1c46447ac9bd67b8355badadbec8dd81e473bc79bb1a347d12b255008f674d",
+      "archive_sha256": "5c518d065027983f6d6536795fe8ae2c1f9f0b5489a7c89862189ac1a80bc0fb",
+      "normalization": "reused_from paths converted to repository-relative paths"
+    },
+    "comparison.csv": {
+      "rows": 30,
+      "source_sha256": "8c8c56d7f1c2b41e1caf77a325061ac48a654cd61e9de20a528ff0d2d3627557",
+      "archive_sha256": "8c8c56d7f1c2b41e1caf77a325061ac48a654cd61e9de20a528ff0d2d3627557",
+      "normalization": "byte-identical copy"
+    },
+    "runs.csv": {
+      "rows": 390,
+      "source_sha256": "db6bd64f50668850410675b99259b8fc49c369e4949d398f2542fce803fdf970",
+      "archive_sha256": "89e9d4b51e9e55b3a0164e62ea6981de06a1a3690a61b6a6a21ecf445093ce4f",
+      "normalization": "reused_from paths converted to repository-relative paths"
+    }
+  },
+  "max_abs_median_error_pct": 12.605042016806745,
+  "ns3_runs_per_condition": 10,
+  "review_report": "doc/review-hidden-node-changes-20261027.md",
+  "known_review_findings": [
+    "R1:interference metadata can arrive after successful packet completion",
+    "R2:CTS can transmit while a pre-existing NAV reservation is active",
+    "R3:resume checkpoint metrics are not replaced by reparsed log metrics"
+  ],
+  "reused_dataset": {
+    "source_directory": "output/hidden-cw-20261027-comparison",
+    "senders": [
+      1,
+      2,
+      4,
+      8,
+      15
+    ],
+    "real_runs": 30,
+    "ns3_runs": 100,
+    "source_runs_json_sha256": "7a708df200a67135a4306c3a8b9e1f13d987348510e1e08f8e46304c5511dd0c",
+    "models": [
+      {
+        "backoff_seed": 12345,
+        "shared_library_sha256": "bc284eaaf002c0d07b8c1599391a658f338cedcf5b81e1d0c4de369942df82cc",
+        "test_sha256": "267897027fb4a54ccd884f83bd1309ad570a9f3da42f06e99c9997a0e5b4a9ce"
+      },
+      {
+        "backoff_seed": 23456,
+        "shared_library_sha256": "166dce659f9fdccd0efebdb2c059032aa3230852da21e92650587e1cfb9d1fb7",
+        "test_sha256": "267897027fb4a54ccd884f83bd1309ad570a9f3da42f06e99c9997a0e5b4a9ce"
+      },
+      {
+        "backoff_seed": 34567,
+        "shared_library_sha256": "85f392512451c575063be33ad872c0d0eeef32db43a0d9a2375e9655ebf5e45a",
+        "test_sha256": "267897027fb4a54ccd884f83bd1309ad570a9f3da42f06e99c9997a0e5b4a9ce"
+      }
+    ]
+  },
+  "producer_runner_sha256": "fdf3642869c9b3bc270cdf0494360d6a82a2641aa5a66f0f033d10a8d767584d",
+  "argument_and_anchor_validation_sha256": "26fcf4b45e621054b5e9f20a457b248ca23dadb2c8790a8f7399198b0deaebeb",
+  "archive_replot_check": "BothPNGfiguresregeneratedfromarchivedCSV/manifestarepixel-identicaltotheoriginalfinalfigures"
+}

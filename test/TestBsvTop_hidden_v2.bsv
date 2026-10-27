@@ -1,4 +1,6 @@
 // ============================================================================
+// 历史8节点功能观察用例：PER全通过、低负载和跨档统计均不适合作为ns-3数值验收。
+// 正式16节点MAC/PHY对照请用 TestHidden16.bsv 和 compare_hidden_ns3.py。
 // TestBsvTop_hidden_v2.bsv - 隐藏节点拓扑饱和吞吐测试 (Bluesim, 含新碰撞模型)
 //
 // 对齐板测 test_hidden_terminal.c / ns-3 hidden-terminal.cc 口径:

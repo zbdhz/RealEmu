@@ -26,6 +26,19 @@ module mkTestDeadlockP2P(Empty);
     Reg#(UInt#(8)) completed <- mkReg(0);
     Reg#(UInt#(8)) delivered <- mkReg(0);
     Reg#(Bit#(64)) seen <- mkReg(0);
+`ifdef P2P_RXSTART_TIMEOUT
+    Reg#(Bool) responseConfigured <- mkReg(False);
+    rule configureResponse(!responseConfigured && phase == 0);
+        sender.macRegSrv.request.put(RegAccessReq{writeEnable: True,
+            regOffset: mac_timeout_off, writeData: 45});
+        phase <= 3;
+    endrule
+    rule configuredResponse(phase == 3);
+        let response <- sender.macRegSrv.response.get;
+        if (response.error) begin $display("TEST_FAIL p2p response configuration"); $finish(1); end
+        responseConfigured <= True; phase <= 0;
+    endrule
+`endif
 
     rule tick;
         cycle <= cycle + 1;
@@ -36,7 +49,11 @@ module mkTestDeadlockP2P(Empty);
         sender.phyStatus.put(a);
         receiver.phyStatus.put(b);
     endrule
-    rule configure(phase == 0 && caseId < 16);
+    rule configure(phase == 0 && caseId < 16
+`ifdef P2P_RXSTART_TIMEOUT
+        && responseConfigured
+`endif
+    );
         sender.macRegSrv.request.put(RegAccessReq{
             writeEnable: True, regOffset: mac_rts_thresh_off,
             writeData: caseId < 8 ? 65535 : 100});
